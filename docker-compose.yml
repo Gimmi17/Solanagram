@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  bot:
+    container_name: solanagram-bot
+    build: .
+    ports:
+      - "1717:1717"
+    volumes:
+      - solanagram-data:/app/data
+    env_file: .env
+    restart: unless-stopped
+    networks:
+      - solanagram-network
+    labels:
+      - "com.solanagram.project=solanagram-trading-bot"
+      - "com.solanagram.component=main-bot"
+      - "com.solanagram.version=1.0"
+
+volumes:
+  solanagram-data:
+    name: solanagram-data
+
+networks:
+  solanagram-network:
+    name: solanagram-network 
