@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Solanagram{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=202506180001">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-brand">
+                <h1>🔐 Solanagram</h1>
+            </div>
+            <div class="nav-menu">
+                <a href="/dashboard" class="nav-link">Dashboard</a>
+                <a href="/chats" class="nav-link">Chat</a>
+                <a href="/settings" class="nav-link">Impostazioni</a>
+                <a href="#" onclick="logout()" class="nav-link">Logout</a>
+            </div>
+        </div>
+    </nav>
+
+    <main class="main-content">
+        {% block content %}{% endblock %}
+    </main>
+
+    <script>
+        // Global logout function
+        function logout() {
+            if (confirm('Sei sicuro di voler uscire?')) {
+                localStorage.removeItem('access_token');
+                localStorage.removeItem('session_token');
+                window.location.href = '/';
+            }
+        }
+
+        // Show message function
+        function showMessage(message, type = 'info') {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message message-${type}`;
+            messageDiv.textContent = message;
+            
+            // Insert at top of main content
+            const mainContent = document.querySelector('.main-content');
+            if (mainContent) {
+                mainContent.insertBefore(messageDiv, mainContent.firstChild);
+            }
+        }
+
+        // API request helper
+        async function makeRequest(url, options = {}) {
+            const token = localStorage.getItem('session_token') || localStorage.getItem('access_token');
+            const headers = {
+                'Content-Type': 'application/json',
+                ...options.headers
+            };
+            
+            if (token) {
+                headers.Authorization = `Bearer ${token}`;
+            }
+            
+            try {
+                const response = await fetch(url, {
+                    ...options,
+                    headers
+                });
+                
+                if (response.status === 401) {
+                    localStorage.removeItem('access_token');
+                    localStorage.removeItem('session_token');
+                    window.location.href = '/';
+                    return null;
+                }
+                
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Request error:', error);
+                throw error;
+            }
+        }
+    </script>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html> 

@@ -1,0 +1,145 @@
+version: '3.8'
+
+services:
+  # 🔴 Redis - Cache e sessioni
+  redis:
+    image: redis:7-alpine
+    container_name: tcm-redis-dev
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - telegram-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # 🗄️ PostgreSQL - Database principale
+  postgres:
+    image: postgres:15-alpine
+    container_name: solanagram-postgres-dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: chatmanager
+      POSTGRES_USER: chatmanager
+      POSTGRES_PASSWORD: chatmanager_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - telegram-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatmanager -d chatmanager"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # 🔧 Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: development
+    container_name: tcm-backend-dev
+    restart: unless-stopped
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=true
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID:-0}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH:-}
+    env_file:
+      - .env
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./backend:/app/backend:ro
+      - ./database:/app/database:ro
+      - backend_logs:/app/logs
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /Users/gimmidefranceschi/.solanagram-forwarder-configs:/tmp/solanagram-configs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - telegram-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 🌐 Frontend Web
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+      target: development
+    container_name: tcm-frontend-dev
+    restart: unless-stopped
+    environment:
+      - FLASK_ENV=development
+      - DEBUG=true
+      - BACKEND_URL=http://backend:5000
+    env_file:
+      - .env
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./frontend:/app/frontend:ro
+      - frontend_logs:/app/logs
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - telegram-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 📊 Adminer - Database management (development only)
+  adminer:
+    image: adminer:4-standalone
+    container_name: tcm-adminer-dev
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    depends_on:
+      - postgres
+    networks:
+      - telegram-net
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: pepa-linha
+
+
+networks:
+  telegram-net:
+    driver: bridge
+    name: solanagram-dev
+
+volumes:
+  postgres_data:
+    name: solanagram-postgres-dev-data
+  redis_data:
+          name: solanagram-redis-dev-data
+  backend_logs:
+          name: solanagram-backend-dev-logs
+  frontend_logs:
+          name: solanagram-frontend-dev-logs 

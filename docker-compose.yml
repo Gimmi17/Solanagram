@@ -1,25 +1,152 @@
+name: solanagram
 version: '3.8'
-services:
-  bot:
-    container_name: solanagram-bot
-    build: .
-    ports:
-      - "1717:1717"
-    volumes:
-      - solanagram-data:/app/data
-    env_file: .env
-    restart: unless-stopped
-    networks:
-      - solanagram-network
-    labels:
-      - "com.solanagram.project=solanagram-trading-bot"
-      - "com.solanagram.component=main-bot"
-      - "com.solanagram.version=1.0"
 
-volumes:
-  solanagram-data:
-    name: solanagram-data
+# ------------------------------------------------------------------------------
+# Solanagram Docker Compose - Sistema completo
+# ------------------------------------------------------------------------------
+# Questo file orchestra tutti i servizi necessari per il funzionamento
+# di Solanagram con funzionalità complete di gestione gruppi Telegram.
+#
+# Servizi principali:
+#   - solanagram-frontend: Interfaccia web Flask (porta 8082)
+#   - solanagram-backend: API backend Flask e gestione Telegram (porta 5001)
+#   - solanagram-db: Database PostgreSQL per la persistenza
+#   - solanagram-cache: Cache Redis per sessioni e performance
+#   - solanagram-adminer: Utility web per la gestione del database
+#
+# Per avviare: docker-compose up -d --build
+# Per fermare: docker-compose down
+# ------------------------------------------------------------------------------
+
+services:
+  # 🔴 Cache Redis
+  solanagram-cache:
+    image: redis:7-alpine
+    container_name: solanagram-cache
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - solanagram_redis_data:/data
+    networks:
+      - solanagram-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # 🗄️ Database PostgreSQL
+  solanagram-db:
+    image: postgres:15-alpine
+    container_name: solanagram-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: solanagram_db
+      POSTGRES_USER: solanagram_user
+      POSTGRES_PASSWORD: solanagram_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - solanagram_postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - solanagram-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U solanagram_user -d solanagram_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # 🔧 Backend API
+  solanagram-backend:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+      target: development
+    container_name: solanagram-backend
+    restart: unless-stopped
+    environment:
+      - FLASK_ENV=development
+      - FLASK_DEBUG=true
+      - REDIS_HOST=solanagram-cache
+      - DATABASE_URL=postgresql://solanagram_user:solanagram_password@solanagram-db/solanagram_db
+      - FORWARDER_PROJECT_NAME=Solanagram-Forwarders
+    env_file:
+      - .env
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./backend:/app/backend
+      - ./database:/app/database
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      solanagram-db:
+        condition: service_healthy
+      solanagram-cache:
+        condition: service_healthy
+    networks:
+      - solanagram-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 🌐 Frontend Web
+  solanagram-frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+      target: development
+    container_name: solanagram-frontend
+    restart: unless-stopped
+    environment:
+      - FLASK_ENV=development
+      - DEBUG=true
+      - BACKEND_URL=http://solanagram-backend:5000
+    env_file:
+      - .env
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./frontend:/app/frontend
+    depends_on:
+      solanagram-backend:
+        condition: service_healthy
+    networks:
+      - solanagram-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 📊 Adminer - Database Management
+  solanagram-adminer:
+    image: adminer:4-standalone
+    container_name: solanagram-adminer
+    restart: unless-stopped
+    ports:
+      - "8081:8080"
+    depends_on:
+      - solanagram-db
+    networks:
+      - solanagram-net
+    environment:
+      ADMINER_DEFAULT_SERVER: solanagram-db
+      ADMINER_DESIGN: pepa-linha
 
 networks:
-  solanagram-network:
-    name: solanagram-network 
+  solanagram-net:
+    driver: bridge
+    name: solanagram-net
+
+volumes:
+  solanagram_postgres_data:
+    name: solanagram-postgres-data
+  solanagram_redis_data:
+    name: solanagram-redis-data 

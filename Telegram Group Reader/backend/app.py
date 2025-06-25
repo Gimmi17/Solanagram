@@ -1,0 +1,1819 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+🔐 Real Telegram Authentication Backend
+Fixed version with proper asyncio handling and code obfuscation
+"""
+
+import os
+import logging
+import hashlib
+import secrets
+import random
+import asyncio
+import re
+import time
+import json
+from datetime import datetime, timedelta, timezone
+from typing import Dict, Any, Optional, Tuple
+
+from flask import Flask, jsonify, request, g
+from flask_cors import CORS
+from flask_jwt_extended import create_access_token, get_jwt_identity, jwt_required, JWTManager
+from werkzeug.security import generate_password_hash, check_password_hash
+from cryptography.fernet import Fernet
+
+import psycopg2
+import psycopg2.extras
+from psycopg2.extras import RealDictCursor
+import redis
+
+from telethon import TelegramClient, errors
+from telethon.sessions import StringSession
+
+# Import forwarder manager
+from forwarder_manager import ForwarderManager
+
+# Logging Configuration
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# ============================================
+# Error Messages in Italian for better UX
+# ============================================
+
+ERROR_MESSAGES = {
+    'REQUIRED_FIELDS': 'Tutti i campi sono obbligatori',
+    'INVALID_API_ID': 'Formato API ID non valido. Deve essere un numero',
+    'INVALID_PHONE': 'Formato numero di telefono non valido. Usa il formato +39xxxxxxxxx',
+    'PHONE_EXISTS': 'Un utente con questo numero di telefono esiste già',
+    'REGISTRATION_FAILED': 'Registrazione fallita. Riprova più tardi',
+    'DB_CONNECTION_FAILED': 'Connessione al database fallita',
+    'REDIS_CONNECTION_FAILED': 'Connessione al sistema di cache fallita',
+    'TELEGRAM_CLIENT_FAILED': 'Impossibile inizializzare il client Telegram',
+    'PHONE_INVALID': 'Numero di telefono non valido o non registrato su Telegram',
+    'API_CREDENTIALS_INVALID': 'Credenziali API Telegram non valide. Controlla API ID e API Hash su https://my.telegram.org',
+    'VERIFICATION_CODE_INVALID': 'Codice di verifica non valido',
+    'VERIFICATION_EXPIRED': 'Richiesta di verifica scaduta. Effettua nuovamente il login',
+    'PASSWORD_2FA_REQUIRED': 'Password 2FA richiesta ma non fornita',
+    'PASSWORD_2FA_INVALID': 'Password 2FA non valida',
+    'AUTH_RESTART_REQUIRED': 'Errore di autenticazione. Riprova il login',
+    'FLOOD_WAIT': 'Troppe richieste. Attendi qualche minuto prima di riprovare',
+    'UNAUTHORIZED': 'Autorizzazione persa. Effettua nuovamente il login',
+    'PHONE_PASSWORD_REQUIRED': 'Numero di telefono e password sono obbligatori',
+    'INVALID_CREDENTIALS': 'Numero di telefono o password non validi',
+    'API_CREDENTIALS_NOT_SET': 'Credenziali API non impostate per questo utente',
+    'PHONE_CODE_REQUIRED': 'Numero di telefono e codice sono obbligatori',
+    'ASYNCIO_LOOP_ERROR': 'Problema di connessione rilevato. Tutti i dati sono stati puliti, riprova il login',
+    'UNEXPECTED_ERROR': 'Errore inaspettato: {error}'
+}
+
+def get_error_message(key: str, **kwargs) -> str:
+    """Get error message with optional formatting"""
+    message = ERROR_MESSAGES.get(key, f'Errore sconosciuto: {key}')
+    return message.format(**kwargs) if kwargs else message
+
+# Environment-based configuration
+class Config:
+    SECRET_KEY = os.environ.get('SECRET_KEY', secrets.token_hex(32))
+    DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://chatmanager:chatmanager_password@postgres:5432/chatmanager')
+    REDIS_HOST = os.environ.get('REDIS_HOST', 'redis')
+    REDIS_PORT = int(os.environ.get('REDIS_PORT', 6379))
+    REDIS_DB = int(os.environ.get('REDIS_DB', 0))
+    JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', secrets.token_hex(32))
+    ENCRYPTION_KEY = os.environ.get('ENCRYPTION_KEY') # Must be set in .env
+    
+    # ============================================
+    # 📱 MULTI-CHANNEL CONFIGURATION
+    # ============================================
+    PRIMARY_CHANNEL_ID = os.environ.get('PRIMARY_CHANNEL_ID')
+    SECONDARY_CHANNEL_ID = os.environ.get('SECONDARY_CHANNEL_ID')
+    BACKUP_CHANNEL_ID = os.environ.get('BACKUP_CHANNEL_ID')
+    
+    # Canali configurati come lista per iterazione
+    CONFIGURED_CHANNELS = [
+        {"id": PRIMARY_CHANNEL_ID, "name": "primary", "priority": 1},
+        {"id": SECONDARY_CHANNEL_ID, "name": "secondary", "priority": 2},
+        {"id": BACKUP_CHANNEL_ID, "name": "backup", "priority": 3}
+    ]
+
+    if not ENCRYPTION_KEY:
+        raise ValueError("ENCRYPTION_KEY is not set in the environment variables.")
+
+    try:
+        fernet = Fernet(ENCRYPTION_KEY.encode())
+    except Exception as e:
+        raise ValueError(f"Invalid ENCRYPTION_KEY format. Must be a valid Fernet key: {e}")
+
+
+# Telethon is available and will be used
+TELETHON_AVAILABLE = True
+
+app = Flask(__name__)
+app.config.from_object(Config)
+CORS(app, origins=["http://localhost:8082"], supports_credentials=True, methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+jwt = JWTManager(app)
+
+# Directory for Telethon session files
+SESSION_DIR = 'telethon_sessions'
+os.makedirs(SESSION_DIR, exist_ok=True)
+
+# In-memory cache for active Telethon clients to maintain sessions
+active_clients: Dict[str, TelegramClient] = {}
+client_locks: Dict[str, asyncio.Lock] = {}
+
+
+# ============================================
+#  Encryption Utilities
+# ============================================
+
+def encrypt_api_hash(api_hash: str) -> str:
+    """Encrypts the API hash for secure storage."""
+    try:
+        return Config.fernet.encrypt(api_hash.encode()).decode()
+    except Exception as e:
+        logger.error(f"Failed to encrypt API hash: {e}")
+        raise ValueError("Encryption failed")
+
+def decrypt_api_hash(encrypted_hash: str) -> str:
+    """Decrypts the API hash for use."""
+    try:
+        return Config.fernet.decrypt(encrypted_hash.encode()).decode()
+    except Exception as e:
+        logger.error(f"Failed to decrypt API hash: {e}")
+        raise ValueError("Decryption failed")
+
+
+# ============================================
+#  Database & Redis Connections
+# ============================================
+
+def get_db_connection():
+    """Establishes a new database connection if one doesn't exist for the current context."""
+    if 'db' not in g:
+        try:
+            g.db = psycopg2.connect(
+                Config.DATABASE_URL,
+                cursor_factory=RealDictCursor,
+                connect_timeout=10,
+                application_name='telegram_chat_manager'
+            )
+            g.db.autocommit = False
+            logger.info("Database connection successful.")
+        except (psycopg2.OperationalError, psycopg2.DatabaseError) as e:
+            logger.error(f"Could not connect to database: {e}")
+            g.db = None
+    return g.db
+
+def get_redis_connection():
+    """Establishes a new Redis connection if one doesn't exist for the current context."""
+    if 'redis_client' not in g:
+        try:
+            g.redis_client = redis.Redis(
+                host=Config.REDIS_HOST,
+                port=Config.REDIS_PORT,
+                db=Config.REDIS_DB,
+                decode_responses=True,
+                socket_connect_timeout=5
+            )
+            g.redis_client.ping()
+            logger.info("Redis connection successful.")
+        except redis.exceptions.ConnectionError as e:
+            logger.error(f"Could not connect to Redis: {e}")
+            g.redis_client = None
+    return g.redis_client
+
+@app.teardown_appcontext
+def teardown_db(exception=None):
+    """Closes database and other connections at the end of the request."""
+    db = g.pop('db', None)
+    if db is not None:
+        try:
+            if not db.closed:
+                db.close()
+        except Exception as e:
+            logger.error(f"Error closing database connection: {e}")
+    # No need to explicitly close Redis connections managed by the library pool
+
+
+# ============================================
+#  Telethon Client Management
+# ============================================
+
+def hash_phone_number(phone: str) -> str:
+    """Hashes the phone number for privacy when used in filenames."""
+    return hashlib.sha256(phone.encode()).hexdigest()
+
+async def cleanup_phone_completely(phone: str):
+    """
+    Completely cleans up all data for a phone number to solve asyncio loop issues.
+    This includes client disconnection, session file removal, and cache cleanup.
+    """
+    try:
+        # Disconnect and remove from active clients
+        if phone in active_clients:
+            try:
+                client = active_clients[phone]
+                if client.is_connected():
+                    await client.disconnect()
+                logger.info(f"Disconnected client for {phone}")
+            except Exception as e:
+                logger.warning(f"Error disconnecting client for {phone}: {e}")
+            finally:
+                del active_clients[phone]
+        
+        # Remove client lock if exists
+        if phone in client_locks:
+            del client_locks[phone]
+        
+        # Remove session file
+        session_file = os.path.join(SESSION_DIR, f"user_{hash_phone_number(phone)}.session")
+        if os.path.exists(session_file):
+            os.remove(session_file)
+            logger.info(f"Removed session file for {phone}")
+        
+        # Clear Redis verification data
+        redis_conn = get_redis_connection()
+        if redis_conn:
+            verification_key = f"verification:{phone}"
+            redis_conn.delete(verification_key)
+            logger.info(f"Cleared Redis data for {phone}")
+            
+        logger.info(f"Complete cleanup performed for {phone}")
+    except Exception as e:
+        logger.error(f"Error during complete cleanup for {phone}: {e}")
+
+async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string_session: bool = False) -> Optional[TelegramClient]:
+    """
+    Creates a new Telethon client for a given phone number.
+    Always creates a fresh client to avoid asyncio loop issues.
+    Properly cleans up old clients to prevent connection conflicts.
+    """
+    try:
+        # Always clean up any existing client for this phone to avoid loop conflicts
+        if phone in active_clients:
+            try:
+                old_client = active_clients[phone]
+                if old_client.is_connected():
+                    await old_client.disconnect()
+                logger.info(f"Cleaned up old client for {phone}")
+            except Exception as e:
+                logger.warning(f"Error cleaning up old client for {phone}: {e}")
+            finally:
+                del active_clients[phone]
+
+        logger.info(f"Creating a new Telethon client for phone {phone} (string_session={use_string_session})")
+        
+        if use_string_session:
+            # For StringSession, first check if we have a saved session
+            session_file = os.path.join(SESSION_DIR, f"user_{hash_phone_number(phone)}.session")
+            session_string = ""
+            
+            # Try to load existing session string if we have a file session
+            if os.path.exists(session_file):
+                # Create a temporary client to extract the session string
+                temp_client = TelegramClient(session_file, api_id, api_hash)
+                await temp_client.connect()
+                if temp_client.is_connected():
+                    session_string = temp_client.session.save()
+                    await temp_client.disconnect()
+                    logger.info(f"Extracted session string from file for {phone}, length: {len(session_string)}")
+            
+            # Create client with StringSession
+            from telethon.sessions import StringSession
+            client = TelegramClient(StringSession(session_string), api_id, api_hash)
+        else:
+            # Normal file-based session
+            session_file = os.path.join(SESSION_DIR, f"user_{hash_phone_number(phone)}.session")
+            client = TelegramClient(session_file, api_id, api_hash)
+        
+        # Connect with timeout to avoid hanging
+        await asyncio.wait_for(client.connect(), timeout=30.0)
+        
+        if not client.is_connected():
+            raise Exception("Failed to establish connection to Telegram servers")
+        
+        # Small delay to ensure connection is stable
+        await asyncio.sleep(0.5)
+        
+        # Store the new client
+        active_clients[phone] = client
+        logger.info(f"New client for {phone} created and connected.")
+        return client
+        
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout connecting to Telegram for {phone}")
+        return None
+    except errors.ApiIdInvalidError:
+        logger.error(f"Invalid API ID for {phone}")
+        return None
+    except Exception as e:
+        logger.error(f"Fatal error connecting new Telethon client for {phone}: {e}")
+        # Cleanup on failure
+        if phone in active_clients:
+            del active_clients[phone]
+        return None
+
+# ========================================================================================
+# ASYNC TELETHON HELPERS
+# ========================================================================================
+
+async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, password: str) -> dict:
+    """
+    Initializes a client, sends a verification code, and stores necessary data in Redis.
+    Enhanced with detailed error messages and better error handling.
+    """
+    redis_conn = get_redis_connection()
+    if not redis_conn:
+        return {"success": False, "status": "error", "error": get_error_message('REDIS_CONNECTION_FAILED')}
+
+    try:
+        client = await get_telethon_client(phone, api_id, api_hash)
+        if not client:
+            return {"success": False, "status": "error", "error": get_error_message('TELEGRAM_CLIENT_FAILED')}
+
+        # Ensure client is connected before sending code request
+        if not client.is_connected():
+            logger.warning(f"Client for {phone} not connected, attempting to reconnect...")
+            await client.connect()
+            if not client.is_connected():
+                return {"success": False, "status": "error", "error": "Cannot establish connection to Telegram servers"}
+
+        result = await client.send_code_request(phone, force_sms=True)
+        
+        verification_key = f"verification:{phone}"
+        verification_data = {
+            "api_id": api_id,
+            "api_hash": api_hash,
+            "phone_code_hash": result.phone_code_hash,
+            "password": password,  # Store password for 2FA verification
+        }
+        redis_conn.set(verification_key, json.dumps(verification_data), ex=600)  # 10-minute expiry
+
+        logger.info(f"Successfully sent code to {phone} and stored verification data in Redis.")
+        return {"success": True, "status": "success", "message": "Codice di verifica inviato tramite Telegram."}
+
+    except errors.AuthRestartError:
+        logger.warning(f"AuthRestartError for {phone}. Cleaning up and retrying with fresh session.")
+        # Clean up session and client completely
+        await cleanup_phone_completely(phone)
+        
+        # Retry with a fresh client and session
+        try:
+            logger.info(f"Retrying code request for {phone} with fresh session.")
+            client = await get_telethon_client(phone, api_id, api_hash)
+            if not client:
+                return {"success": False, "status": "error", "error": get_error_message('TELEGRAM_CLIENT_FAILED')}
+
+            # Ensure client is connected before retry
+            if not client.is_connected():
+                logger.warning(f"Retry client for {phone} not connected, attempting to reconnect...")
+                await client.connect()
+                if not client.is_connected():
+                    return {"success": False, "status": "error", "error": "Cannot establish connection to Telegram servers during retry"}
+
+            result = await client.send_code_request(phone, force_sms=True)
+            
+            verification_key = f"verification:{phone}"
+            verification_data = {
+                "api_id": api_id,
+                "api_hash": api_hash,
+                "phone_code_hash": result.phone_code_hash,
+                "password": password,
+            }
+            redis_conn.set(verification_key, json.dumps(verification_data), ex=600)
+
+            logger.info(f"Successfully sent code to {phone} after AuthRestart recovery.")
+            return {"success": True, "status": "success", "message": "Codice di verifica inviato tramite Telegram."}
+            
+        except Exception as retry_error:
+            logger.error(f"Failed to retry after AuthRestartError for {phone}: {retry_error}")
+            return {"success": False, "status": "error", "error": get_error_message('AUTH_RESTART_REQUIRED')}
+    
+    except errors.PhoneNumberInvalidError:
+        logger.error(f"Invalid phone number provided: {phone}")
+        return {"success": False, "status": "error", "error": get_error_message('PHONE_INVALID')}
+
+    except errors.ApiIdInvalidError:
+        logger.error(f"Invalid API ID provided for {phone}")
+        return {"success": False, "status": "error", "error": get_error_message('API_CREDENTIALS_INVALID')}
+
+    except errors.FloodWaitError as e:
+        logger.error(f"Flood wait error for {phone}: {e.seconds} seconds")
+        return {"success": False, "status": "error", "error": f"{get_error_message('FLOOD_WAIT')} (Attendi {e.seconds} secondi)"}
+
+    except Exception as e:
+        error_msg = str(e)
+        # Check for asyncio loop issues
+        if "asyncio event loop" in error_msg.lower() or "different event loop" in error_msg.lower():
+            logger.warning(f"Asyncio loop issue for {phone}. Performing complete cleanup.")
+            await cleanup_phone_completely(phone)
+            return {"success": False, "status": "error", "error": get_error_message('ASYNCIO_LOOP_ERROR')}
+        
+        logger.error(f"An unexpected error occurred while sending code to {phone}: {e}")
+        return {"success": False, "status": "error", "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}
+
+
+async def verify_telegram_code_async(phone: str, code: str) -> dict:
+    """
+    Asynchronously verifies the Telegram code using data from Redis.
+    Enhanced with detailed error messages.
+    """
+    redis_conn = get_redis_connection()
+    verification_key = f"verification:{phone}"
+    
+    if not redis_conn or not redis_conn.exists(verification_key):
+        logger.error(f"No verification data found in Redis for phone {phone}.")
+        return {"success": False, "status": "error", "error": get_error_message('VERIFICATION_EXPIRED')}
+
+    verification_data = json.loads(redis_conn.get(verification_key))
+    api_id = verification_data["api_id"]
+    api_hash = verification_data["api_hash"]
+    phone_code_hash = verification_data["phone_code_hash"]
+    password = verification_data.get("password")
+
+    client = await get_telethon_client(phone, api_id, api_hash)
+    if not client:
+        return {"success": False, "status": "error", "error": get_error_message('TELEGRAM_CLIENT_FAILED')}
+        
+    try:
+        await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+        logger.info(f"Successfully signed in user {phone}.")
+        
+    except errors.SessionPasswordNeededError:
+        logger.info(f"2FA password needed for {phone}. Trying to supply stored password.")
+        if not password:
+            return {"success": False, "status": "error", "error": get_error_message('PASSWORD_2FA_REQUIRED')}
+        try:
+            await client.sign_in(password=password)
+            logger.info(f"Successfully signed in user {phone} with 2FA password.")
+        except errors.PasswordHashInvalidError:
+            logger.error(f"Invalid 2FA password for user {phone}.")
+            return {"success": False, "status": "error", "error": get_error_message('PASSWORD_2FA_INVALID')}
+        except Exception as e:
+            logger.error(f"An error occurred during 2FA sign in for {phone}: {e}")
+            return {"success": False, "status": "error", "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}
+
+    except errors.PhoneCodeInvalidError:
+        logger.error(f"Invalid verification code for phone {phone}.")
+        return {"success": False, "status": "error", "error": get_error_message('VERIFICATION_CODE_INVALID')}
+
+    except errors.FloodWaitError as e:
+        logger.error(f"Flood wait error during verification for {phone}: {e.seconds} seconds")
+        return {"success": False, "status": "error", "error": f"{get_error_message('FLOOD_WAIT')} (Attendi {e.seconds} secondi)"}
+        
+    except Exception as e:
+        logger.error(f"An error occurred during sign in for {phone}: {e}")
+        return {"success": False, "status": "error", "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}
+
+    # If sign in is successful, clean up Redis and find user in DB
+    redis_conn.delete(verification_key)
+    db = get_db_connection()
+    if not db:
+        return {"success": False, "status": "error", "error": get_error_message('DB_CONNECTION_FAILED')}
+        
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SELECT id, phone FROM users WHERE phone = %s", (phone,))
+            user = cursor.fetchone()
+        
+        if not user:
+            return {"success": False, "status": "error", "error": "Utente non trovato nel database"}
+            
+        return {"success": True, "status": "success", "user": user}
+    except Exception as e:
+        logger.error(f"Database error during verification for {phone}: {e}")
+        return {"success": False, "status": "error", "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}
+
+
+async def get_user_chats_async(phone: str) -> dict:
+    """
+    Asynchronously fetches user's dialogs/chats from Telegram.
+    """
+    db = get_db_connection()
+    with db.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute("SELECT api_id, api_hash_encrypted FROM users WHERE phone = %s", (phone,))
+        user_creds = cursor.fetchone()
+
+    if not user_creds or not user_creds['api_id'] or not user_creds['api_hash_encrypted']:
+        return {"success": False, "error": "API credentials not found for this user."}
+
+    api_id = user_creds['api_id']
+    api_hash = decrypt_api_hash(user_creds['api_hash_encrypted'])
+
+    client = await get_telethon_client(phone, api_id, api_hash)
+    if not client or not await client.is_user_authorized():
+        logger.error(f"User {phone} is not authorized. Please log in again.")
+        return {"success": False, "error": "Authorization lost. Please log in again."}
+
+    chats = []
+    try:
+        async for dialog in client.iter_dialogs():
+            if dialog.is_group or dialog.is_channel:
+                # Get entity for more details
+                entity = dialog.entity
+                chat_type = "private"
+                if dialog.is_channel:
+                    chat_type = "channel"
+                elif dialog.is_group:
+                    chat_type = "supergroup" if hasattr(entity, 'megagroup') and entity.megagroup else "group"
+                
+                chat_data = {
+                    "id": dialog.id,
+                    "title": dialog.name or "Unnamed Chat",
+                    "type": chat_type,
+                    "username": getattr(entity, 'username', None),
+                    "members_count": getattr(entity, 'participants_count', None),
+                    "description": getattr(entity, 'about', None),
+                    "unread_count": dialog.unread_count if hasattr(dialog, 'unread_count') else 0,
+                    "last_message_date": dialog.date.isoformat() if dialog.date else None
+                }
+                chats.append(chat_data)
+        
+        logger.info(f"Found {len(chats)} chats for user {phone}")
+        return {"success": True, "chats": chats}
+    except Exception as e:
+        logger.error(f"Failed to fetch chats for {phone}: {e}")
+        return {"success": False, "error": "Failed to fetch chats. Please try logging in again."}
+
+# ============================================
+# 📱 MULTI-CHANNEL ENDPOINTS
+# ============================================
+
+@app.route('/api/telegram/get-configured-channels', methods=['GET'])
+@jwt_required()
+def get_configured_channels():
+    """Restituisce i canali configurati nell'ambiente"""
+    try:
+        phone = get_jwt_identity()
+        if not phone:
+            return jsonify({'error': get_error_message('UNAUTHORIZED')}), 401
+        
+        configured_channels = []
+        for channel in Config.CONFIGURED_CHANNELS:
+            if channel["id"]:  # Solo se l'ID è impostato
+                configured_channels.append({
+                    "id": channel["id"],
+                    "name": channel["name"],
+                    "priority": channel["priority"],
+                    "configured": True
+                })
+        
+        return jsonify({
+            'success': True,
+            'configured_channels': configured_channels,
+            'total_configured': len(configured_channels)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching configured channels: {e}")
+        return jsonify({'error': get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+@app.route('/api/telegram/channel-action', methods=['POST'])
+@jwt_required()
+def channel_action():
+    """Esegue azioni specifiche su un canale configurato"""
+    try:
+        phone = get_jwt_identity()
+        if not phone:
+            return jsonify({'error': get_error_message('UNAUTHORIZED')}), 401
+        
+        data = request.get_json()
+        channel_id = data.get('channel_id')
+        action = data.get('action')  # 'info', 'members', 'recent_messages'
+        
+        if not channel_id or not action:
+            return jsonify({'error': 'channel_id e action sono obbligatori'}), 400
+        
+        # Verifica che il canale sia tra quelli configurati
+        is_configured = any(
+            str(ch["id"]) == str(channel_id) 
+            for ch in Config.CONFIGURED_CHANNELS 
+            if ch["id"]
+        )
+        
+        if not is_configured:
+            return jsonify({'error': 'Canale non configurato nel sistema'}), 403
+        
+        # Esegui l'azione richiesta
+        result = asyncio.run(execute_channel_action_async(phone, channel_id, action))
+        
+        return jsonify(result), 200 if result.get('success') else 400
+        
+    except Exception as e:
+        logger.error(f"Error in channel action: {e}")
+        return jsonify({'error': get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+async def execute_channel_action_async(phone: str, channel_id: str, action: str) -> dict:
+    """Esegue azioni specifiche su un canale"""
+    db = get_db_connection()
+    with db.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute("SELECT api_id, api_hash_encrypted FROM users WHERE phone = %s", (phone,))
+        user_creds = cursor.fetchone()
+
+    if not user_creds:
+        return {"success": False, "error": "Credenziali utente non trovate"}
+
+    api_id = user_creds['api_id']
+    api_hash = decrypt_api_hash(user_creds['api_hash_encrypted'])
+
+    client = await get_telethon_client(phone, api_id, api_hash)
+    if not client or not await client.is_user_authorized():
+        return {"success": False, "error": "Autorizzazione Telegram persa"}
+
+    try:
+        channel_entity = await client.get_entity(int(channel_id))
+        
+        if action == 'info':
+            return {
+                "success": True,
+                "action": "info",
+                "channel": {
+                    "id": channel_entity.id,
+                    "title": channel_entity.title,
+                    "username": getattr(channel_entity, 'username', None),
+                    "participants_count": getattr(channel_entity, 'participants_count', None),
+                    "description": getattr(channel_entity, 'about', None),
+                    "is_channel": hasattr(channel_entity, 'broadcast'),
+                    "is_group": hasattr(channel_entity, 'megagroup')
+                }
+            }
+        
+        elif action == 'members':
+            participants = []
+            async for user in client.iter_participants(channel_entity, limit=100):
+                participants.append({
+                    "id": user.id,
+                    "username": user.username,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                    "is_bot": user.bot
+                })
+            
+            return {
+                "success": True,
+                "action": "members",
+                "channel_id": channel_id,
+                "members": participants,
+                "total_shown": len(participants)
+            }
+        
+        elif action == 'recent_messages':
+            messages = []
+            async for message in client.iter_messages(channel_entity, limit=10):
+                messages.append({
+                    "id": message.id,
+                    "text": message.text or "[Media/File]",
+                    "date": message.date.isoformat() if message.date else None,
+                    "sender_id": message.sender_id,
+                    "views": getattr(message, 'views', None)
+                })
+            
+            return {
+                "success": True,
+                "action": "recent_messages",
+                "channel_id": channel_id,
+                "messages": messages,
+                "total_shown": len(messages)
+            }
+        
+        else:
+            return {"success": False, "error": f"Azione '{action}' non supportata"}
+    
+    except Exception as e:
+        logger.error(f"Error executing channel action {action} on {channel_id}: {e}")
+        return {"success": False, "error": f"Errore durante l'esecuzione: {str(e)}"}
+
+# ============================================
+#  API Endpoints
+# ============================================
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint for Docker container monitoring."""
+    health_status = {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "services": {}
+    }
+    
+    # Check database connection
+    try:
+        db = get_db_connection()
+        if db and not db.closed:
+            with db.cursor() as cursor:
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+            health_status["services"]["database"] = "healthy"
+        else:
+            health_status["services"]["database"] = "unhealthy"
+            health_status["status"] = "degraded"
+    except Exception as e:
+        logger.error(f"Database health check failed: {e}")
+        health_status["services"]["database"] = "unhealthy"
+        health_status["status"] = "degraded"
+    
+    # Check Redis connection
+    try:
+        redis_conn = get_redis_connection()
+        if redis_conn:
+            redis_conn.ping()
+            health_status["services"]["redis"] = "healthy"
+        else:
+            health_status["services"]["redis"] = "unhealthy"
+            health_status["status"] = "degraded"
+    except Exception as e:
+        logger.error(f"Redis health check failed: {e}")
+        health_status["services"]["redis"] = "unhealthy"
+        health_status["status"] = "degraded"
+    
+    status_code = 200 if health_status["status"] != "unhealthy" else 503
+    return jsonify(health_status), status_code
+
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    """Register a new user with phone, password, and Telegram API credentials."""
+    data = request.get_json()
+    
+    # Supporta sia 'phone' che 'phone_number' per compatibilità
+    phone = data.get('phone') or data.get('phone_number')
+    password = data.get('password')
+    api_id = data.get('api_id')
+    api_hash = data.get('api_hash')
+    
+    logger.info(f"Registration attempt for phone: {phone}")
+    
+    if not all([phone, password, api_id, api_hash]):
+        logger.error(f"Missing required fields. phone: {bool(phone)}, password: {bool(password)}, api_id: {bool(api_id)}, api_hash: {bool(api_hash)}")
+        return jsonify({"success": False, "status": "error", "error": get_error_message('REQUIRED_FIELDS')}), 400
+    
+    try:
+        api_id = int(api_id)
+    except (ValueError, TypeError) as e:
+        logger.error(f"Invalid API ID format: {api_id}")
+        return jsonify({"success": False, "status": "error", "error": get_error_message('INVALID_API_ID')}), 400
+    
+    # Validate phone format
+    if not re.match(r'^\+\d{10,15}$', phone):
+        logger.error(f"Invalid phone number format: {phone}")
+        return jsonify({"success": False, "status": "error", "error": get_error_message('INVALID_PHONE')}), 400
+    
+    db = get_db_connection()
+    if not db:
+        return jsonify({"success": False, "status": "error", "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+    
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Check if user already exists
+            cursor.execute("SELECT id FROM users WHERE phone = %s", (phone,))
+            existing_user = cursor.fetchone()
+            if existing_user:
+                return jsonify({"success": False, "status": "error", "error": get_error_message('PHONE_EXISTS')}), 409
+            
+            # Hash password and encrypt API hash
+            password_hash = generate_password_hash(password)
+            api_hash_encrypted = encrypt_api_hash(api_hash)
+            
+            # Insert new user
+            cursor.execute("""
+                INSERT INTO users (phone, password_hash, api_id, api_hash_encrypted, created_at)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+            """, (phone, password_hash, api_id, api_hash_encrypted, datetime.now(timezone.utc)))
+            
+            result = cursor.fetchone()
+            if not result:
+                raise Exception("Failed to insert user - no ID returned")
+                
+            user_id = result['id']
+            db.commit()
+            
+            logger.info(f"New user registered: {phone} (ID: {user_id})")
+            return jsonify({
+                "success": True,
+                "status": "success", 
+                "message": "User registered successfully",
+                "user_id": user_id
+            }), 201
+            
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Registration failed for {phone}: {e}")
+        return jsonify({"success": False, "status": "error", "error": get_error_message('REGISTRATION_FAILED')}), 500
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """
+    Handles user login. Does not start Telegram session, just verifies DB user
+    and sends a verification code via Telegram.
+    """
+    data = request.get_json()
+    # Supporta sia 'phone' che 'phone_number' per compatibilità
+    phone = data.get('phone') or data.get('phone_number')
+    password = data.get('password')
+
+    if not phone or not password:
+        return jsonify({"success": False, "status": "error", "error": get_error_message('PHONE_PASSWORD_REQUIRED')}), 400
+
+    db = get_db_connection()
+    if not db:
+        return jsonify({"success": False, "status": "error", "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+        
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SELECT * FROM users WHERE phone = %s", (phone,))
+            user = cursor.fetchone()
+
+        if user and check_password_hash(user['password_hash'], password):
+            if not user.get('api_id') or not user.get('api_hash_encrypted'):
+                return jsonify({"success": False, "status": "error", "error": get_error_message('API_CREDENTIALS_NOT_SET')}), 400
+
+            api_id = user['api_id']
+            api_hash = decrypt_api_hash(user['api_hash_encrypted'])
+            
+            # Run async function to send code with new event loop
+            result = asyncio.run(send_telegram_code_async(phone, api_id, api_hash, password))
+            
+            if result.get("success"):
+                return jsonify({"success": True, "status": "success", "message": result.get("message")})
+            else:
+                return jsonify(result), 400
+        else:
+            return jsonify({"success": False, "status": "error", "error": get_error_message('INVALID_CREDENTIALS')}), 401
+    except Exception as e:
+        logger.error(f"Login error for {phone}: {e}")
+        return jsonify({"success": False, "status": "error", "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+@app.route('/api/auth/verify-code', methods=['POST'])
+def verify_code():
+    """
+    Verifies the Telegram login code provided by the user.
+    """
+    data = request.get_json()
+    # Supporta sia 'phone' che 'phone_number' per compatibilità
+    phone = data.get('phone') or data.get('phone_number')
+    code = data.get('code')
+    
+    if not phone or not code:
+        return jsonify({"success": False, "status": "error", "error": get_error_message('PHONE_CODE_REQUIRED')}), 400
+
+    logger.info(f"Attempting to verify code for phone: {phone}")
+    
+    try:
+        result = asyncio.run(verify_telegram_code_async(phone, code))
+        
+        if result.get("success"):
+            user = result.get("user")
+            access_token = create_access_token(identity=user['id'])
+            return jsonify({
+                "success": True,
+                "status": "success",
+                "message": "Verifica completata con successo",
+                "access_token": access_token,
+                "user": {
+                    "id": user['id'],
+                    "phone": user['phone'],
+                }
+            })
+        else:
+            return jsonify(result), 401
+    except Exception as e:
+        logger.error(f"Error verifying code: {e}", exc_info=True)
+        return jsonify({"success": False, "status": "error", "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+@app.route('/api/user/profile', methods=['GET', 'PUT'])
+@jwt_required()
+def user_profile():
+    """Get or update user profile information"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+    
+    if request.method == 'GET':
+        try:
+            with db.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT id, phone, api_id, created_at, last_login, is_active 
+                    FROM users WHERE id = %s
+                """, (current_user_id,))
+                user = cursor.fetchone()
+            
+            if not user:
+                return jsonify({"success": False, "error": "User not found"}), 404
+            
+            # Convert datetime objects to strings for JSON serialization
+            user_data = dict(user)
+            if user_data.get('created_at'):
+                user_data['created_at'] = user_data['created_at'].isoformat()
+            if user_data.get('last_login'):
+                user_data['last_login'] = user_data['last_login'].isoformat()
+            
+            return jsonify({
+                "success": True,
+                "user": user_data
+            }), 200
+            
+        except Exception as e:
+            logger.error(f"Error fetching user profile for ID {current_user_id}: {e}")
+            return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+    
+    elif request.method == 'PUT':
+        # Handle profile updates (e.g., API credentials)
+        data = request.get_json()
+        api_id = data.get('api_id')
+        api_hash = data.get('api_hash')
+        
+        if not api_id or not api_hash:
+            return jsonify({"success": False, "error": "API ID and API Hash are required"}), 400
+        
+        try:
+            api_id = int(api_id)
+        except (ValueError, TypeError):
+            return jsonify({"success": False, "error": get_error_message('INVALID_API_ID')}), 400
+        
+        try:
+            with db.cursor(cursor_factory=RealDictCursor) as cursor:
+                # Encrypt the new API hash
+                api_hash_encrypted = encrypt_api_hash(api_hash)
+                
+                cursor.execute("""
+                    UPDATE users 
+                    SET api_id = %s, api_hash_encrypted = %s 
+                    WHERE id = %s
+                """, (api_id, api_hash_encrypted, current_user_id))
+                
+                db.commit()
+                
+                logger.info(f"Updated API credentials for user ID {current_user_id}")
+                return jsonify({
+                    "success": True,
+                    "message": "API credentials updated successfully",
+                    "api_id": api_id
+                }), 200
+                
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Error updating user profile for ID {current_user_id}: {e}")
+            return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+@app.route('/api/user/chats', methods=['GET'])
+@jwt_required()
+def get_user_chats():
+    """
+    Fetches the list of chats for the authenticated user.
+    """
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    with db.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute("SELECT phone FROM users WHERE id = %s", (current_user_id,))
+        user_record = cursor.fetchone()
+    
+    if not user_record:
+        return jsonify({"status": "error", "message": "User not found"}), 404
+        
+    phone = user_record['phone']
+    logger.info(f"Fetching chats for user {phone} (ID: {current_user_id})")
+
+    try:
+        result = asyncio.run(get_user_chats_async(phone))
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error fetching user chats: {e}", exc_info=True)
+        return jsonify({"status": "error", "message": f"An unexpected error occurred: {e}"}), 500
+
+# ============================================
+# 🔄 FORWARDER ENDPOINTS
+# ============================================
+
+@app.route('/api/forwarders/<source_chat_id>', methods=['GET'])
+@jwt_required()
+def get_forwarders(source_chat_id):
+    """Get all forwarders for a specific chat"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+    
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT id, source_chat_id, source_chat_title, target_type, 
+                       target_id, target_name, container_name, status, 
+                       message_count, created_at, last_message_at
+                FROM forwarders 
+                WHERE user_id = %s AND source_chat_id = %s
+                ORDER BY created_at DESC
+            """, (current_user_id, source_chat_id))
+            forwarders = cursor.fetchall()
+        
+        # Get container status for each forwarder
+        forwarder_manager = ForwarderManager()
+        for forwarder in forwarders:
+            if forwarder['container_name']:
+                container_status = forwarder_manager.get_container_status(forwarder['container_name'])
+                forwarder['container_status'] = container_status['status']
+                forwarder['message_count'] = container_status.get('message_count', forwarder['message_count'])
+                forwarder['is_running'] = container_status.get('running', False)
+            else:
+                forwarder['container_status'] = 'not_created'
+                forwarder['is_running'] = False
+            
+            # Convert datetime to ISO format
+            if forwarder.get('created_at'):
+                forwarder['created_at'] = forwarder['created_at'].isoformat()
+            if forwarder.get('last_message_at'):
+                forwarder['last_message_at'] = forwarder['last_message_at'].isoformat()
+        
+        return jsonify({
+            "success": True,
+            "forwarders": forwarders,
+            "total": len(forwarders)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error fetching forwarders: {e}")
+        return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+@app.route('/api/auth/reactivate-session', methods=['POST'])
+@jwt_required()
+def reactivate_telegram_session():
+    """Send verification code to reactivate Telegram session"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT phone, api_id, api_hash_encrypted, password_hash
+                FROM users WHERE id = %s
+            """, (current_user_id,))
+            user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({"success": False, "error": "Utente non trovato"}), 404
+        
+        phone = user['phone']
+        api_id = user['api_id']
+        api_hash = decrypt_api_hash(user['api_hash_encrypted'])
+        
+        # Send verification code
+        result = asyncio.run(send_telegram_code_async(phone, api_id, api_hash, "temp_password"))
+        
+        if result.get("success"):
+            return jsonify({
+                "success": True,
+                "message": "Codice di verifica inviato",
+                "phone": phone  # Return phone for frontend use
+            }), 200
+        else:
+            return jsonify({"success": False, "error": result.get("error", "Errore invio codice")}), 400
+            
+    except Exception as e:
+        logger.error(f"Error reactivating session: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/auth/verify-session-code', methods=['POST'])
+@jwt_required()
+def verify_session_code():
+    """Verify code to reactivate Telegram session"""
+    data = request.get_json()
+    code = data.get('code')
+    
+    if not code:
+        return jsonify({"success": False, "error": "Codice richiesto"}), 400
+    
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SELECT phone FROM users WHERE id = %s", (current_user_id,))
+            user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({"success": False, "error": "Utente non trovato"}), 404
+        
+        phone = user['phone']
+        
+        # Verify the code
+        result = asyncio.run(verify_telegram_code_async(phone, code))
+        
+        if result.get("success"):
+            return jsonify({
+                "success": True,
+                "message": "Sessione riattivata con successo"
+            }), 200
+        else:
+            return jsonify({"success": False, "error": result.get("error", "Codice non valido")}), 400
+            
+    except Exception as e:
+        logger.error(f"Error verifying session code: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/auth/check-session', methods=['POST'])
+@jwt_required()
+def check_telegram_session():
+    """Check if user has an active Telegram session"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT phone, api_id, api_hash_encrypted 
+                FROM users WHERE id = %s
+            """, (current_user_id,))
+            user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({"success": False, "error": "Utente non trovato"}), 404
+        
+        phone = user['phone']
+        
+        # Check if client exists and is authorized
+        if phone in active_clients:
+            client = active_clients[phone]
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                is_authorized = loop.run_until_complete(client.is_user_authorized())
+                loop.close()
+                
+                if is_authorized:
+                    return jsonify({
+                        "success": True, 
+                        "session_active": True,
+                        "message": "Sessione Telegram attiva"
+                    }), 200
+            except:
+                pass
+        
+        return jsonify({
+            "success": True,
+            "session_active": False,
+            "message": "Sessione Telegram non attiva. È necessario effettuare l'accesso."
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error checking session: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/forwarders/prepare', methods=['POST'])
+@jwt_required()
+def prepare_forwarder():
+    """Prepare forwarder session - send verification code"""
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    # Validate required fields
+    required_fields = ['source_chat_id', 'source_chat_title']
+    for field in required_fields:
+        if field not in data:
+            return jsonify({"success": False, "error": f"Campo richiesto: {field}"}), 400
+    
+    db = get_db_connection()
+    if not db:
+        return jsonify({"success": False, "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+    
+    try:
+        # Get user credentials
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT phone, api_id, api_hash_encrypted 
+                FROM users WHERE id = %s
+            """, (current_user_id,))
+            user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({"success": False, "error": "Utente non trovato"}), 404
+        
+        phone = user['phone']
+        api_id = user['api_id']
+        api_hash = decrypt_api_hash(user['api_hash_encrypted'])
+        source_chat_id = data['source_chat_id']
+        
+        # --- Gestione automatica della sessione forwarder ----------------------------------
+        session_name = f"forwarder_{hash_phone_number(phone)}_{source_chat_id}"
+        session_file = os.path.join(SESSION_DIR, f"{session_name}.session")
+
+        code_from_client: Optional[str] = data.get('code')
+
+        # SEMPRE chiediamo il codice per un nuovo forwarder
+        verification_key = f"forwarder_verification:{current_user_id}:{source_chat_id}"
+        redis_conn = get_redis_connection()
+
+        # 1) L'utente NON ha inviato alcun codice -> inviamo codice e salviamo phone_code_hash
+        if not code_from_client:
+            try:
+                async def _send_code():
+                    # Se esiste già un file sessione, rimuoviamolo per iniziare da zero
+                    if os.path.exists(session_file):
+                        os.remove(session_file)
+                        logger.info(f"Removed existing session file for {session_name}")
+                    
+                    client = TelegramClient(session_file, api_id, api_hash)
+                    await client.connect()
+                    result = await client.send_code_request(phone)
+
+                    if redis_conn:
+                        verification_data = {
+                            "phone_code_hash": result.phone_code_hash,
+                            "session_name": session_name,
+                            "api_id": api_id,
+                            "api_hash": api_hash
+                        }
+                        redis_conn.set(verification_key, json.dumps(verification_data), ex=600)
+                    await client.disconnect()
+
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_send_code())
+                loop.close()
+
+                return jsonify({
+                    "success": True,
+                    "code_sent": True,
+                    "message": f"Codice di verifica inviato a {phone}",
+                    "phone": phone
+                }), 202  # 202 Accepted -> client deve inviare 'code'
+            except Exception as e:
+                logger.error(f"Error sending code for forwarder session: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        # 2) Abbiamo ricevuto un codice -> verifichiamo
+        else:
+            if not redis_conn or not redis_conn.exists(verification_key):
+                return jsonify({"success": False, "error": "Richiesta di verifica scaduta o assente"}), 400
+
+            try:
+                verification_data = json.loads(redis_conn.get(verification_key))
+
+                async def _verify_code():
+                    client = TelegramClient(session_file, verification_data['api_id'], verification_data['api_hash'])
+                    await client.connect()
+                    await client.sign_in(phone, code_from_client, phone_code_hash=verification_data['phone_code_hash'])
+                    authorized = await client.is_user_authorized()
+                    await client.disconnect()
+                    return authorized
+
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                ok = loop.run_until_complete(_verify_code())
+                loop.close()
+
+                if not ok:
+                    return jsonify({"success": False, "error": "Codice non valido"}), 400
+
+                # Puliamo la chiave redis e proseguiamo con la creazione del container
+                redis_conn.delete(verification_key)
+                logger.info(f"Forwarder session created for {session_name}")
+            except Exception as e:
+                logger.error(f"Error verifying code for forwarder session: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        # For now, we'll use empty session string as we're using file session
+        session_string = ""
+        
+        # Resolve target name if not provided
+        target_name = data.get('target_name', '')
+        if not target_name:
+            try:
+                # Try to get target entity name
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                async def get_target_name():
+                    try:
+                        if data['target_type'] == 'user' and data['target_id'].startswith('@'):
+                            entity = await client.get_entity(data['target_id'])
+                        else:
+                            entity = await client.get_entity(int(data['target_id']))
+                        
+                        if hasattr(entity, 'username') and entity.username:
+                            return f"@{entity.username}"
+                        elif hasattr(entity, 'first_name'):
+                            return f"{entity.first_name} {getattr(entity, 'last_name', '')}".strip()
+                        elif hasattr(entity, 'title'):
+                            return entity.title
+                        else:
+                            return data['target_id']
+                    except:
+                        return data['target_id']
+                
+                target_name = loop.run_until_complete(get_target_name())
+                loop.close()
+            except:
+                target_name = data['target_id']
+        
+        # Build forwarder image if needed
+        forwarder_manager = ForwarderManager()
+        if not forwarder_manager.build_forwarder_image():
+            return jsonify({"success": False, "error": "Impossibile creare l'immagine Docker per il forwarder"}), 500
+        
+        # Get forwarder-specific session file path
+        session_name = f"forwarder_{hash_phone_number(phone)}_{source_chat_id}"
+        forwarder_session_file = os.path.join(SESSION_DIR, f"{session_name}.session")
+        
+        # Create container
+        success, container_name, message = forwarder_manager.create_forwarder_container(
+            user_id=current_user_id,
+            phone=phone,
+            api_id=api_id,
+            api_hash=api_hash,
+            session_string=session_string,
+            source_chat_id=data['source_chat_id'],
+            source_chat_title=data['source_chat_title'],
+            target_type=data['target_type'],
+            target_id=data['target_id'],
+            target_name=target_name,
+            session_file_path=forwarder_session_file
+        )
+        
+        if not success:
+            return jsonify({"success": False, "error": f"Errore creazione container: {message}"}), 500
+        
+        # Save to database
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                INSERT INTO forwarders (
+                    user_id, source_chat_id, source_chat_title, 
+                    target_type, target_id, target_name, 
+                    container_name, status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                current_user_id, data['source_chat_id'], data['source_chat_title'],
+                data['target_type'], data['target_id'], target_name,
+                container_name, 'running'
+            ))
+            
+            forwarder_id = cursor.fetchone()['id']
+            db.commit()
+        
+        logger.info(f"Created forwarder {forwarder_id} with container {container_name}")
+        
+        return jsonify({
+            "success": True,
+            "message": "Inoltro creato con successo",
+            "forwarder_id": forwarder_id,
+            "container_name": container_name
+        }), 201
+        
+    except Exception as e:
+        if db:
+            db.rollback()
+        logger.error(f"Error preparing forwarder: {e}")
+        return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+@app.route('/api/forwarders/verify-code', methods=['POST'])
+@jwt_required()
+def verify_forwarder_code():
+    """Verify code and create forwarder session"""
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    if not data.get('code') or not data.get('source_chat_id'):
+        return jsonify({"success": False, "error": "Codice e source_chat_id richiesti"}), 400
+    
+    redis_conn = get_redis_connection()
+    verification_key = f"forwarder_verification:{current_user_id}:{data['source_chat_id']}"
+    
+    if not redis_conn or not redis_conn.exists(verification_key):
+        return jsonify({"success": False, "error": "Richiesta di verifica scaduta"}), 400
+    
+    try:
+        verification_data = json.loads(redis_conn.get(verification_key))
+        session_name = verification_data['session_name']
+        session_file = os.path.join(SESSION_DIR, f"{session_name}.session")
+        
+        async def verify_and_save():
+            client = TelegramClient(
+                session_file,
+                verification_data['api_id'],
+                verification_data['api_hash']
+            )
+            await client.connect()
+            
+            db = get_db_connection()
+            with db.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute("SELECT phone FROM users WHERE id = %s", (current_user_id,))
+                user = cursor.fetchone()
+            
+            await client.sign_in(
+                user['phone'],
+                data['code'],
+                phone_code_hash=verification_data['phone_code_hash']
+            )
+            
+            is_authorized = await client.is_user_authorized()
+            await client.disconnect()
+            return is_authorized
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        is_authorized = loop.run_until_complete(verify_and_save())
+        loop.close()
+        
+        if is_authorized:
+            redis_conn.delete(verification_key)
+            return jsonify({
+                "success": True,
+                "message": "Sessione creata con successo"
+            }), 200
+        else:
+            return jsonify({"success": False, "error": "Autorizzazione fallita"}), 400
+            
+    except Exception as e:
+        logger.error(f"Error verifying code: {e}")
+        return jsonify({"success": False, "error": str(e)}), 400
+
+@app.route('/api/forwarders', methods=['POST'])
+@jwt_required()
+def create_forwarder():
+    """Create a new forwarder"""
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    # Validate required fields
+    required_fields = ['source_chat_id', 'source_chat_title', 'target_type', 'target_id']
+    for field in required_fields:
+        if field not in data:
+            return jsonify({"success": False, "error": f"Campo richiesto: {field}"}), 400
+    
+    db = get_db_connection()
+    if not db:
+        return jsonify({"success": False, "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+    
+    try:
+        # Get user credentials
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT phone, api_id, api_hash_encrypted 
+                FROM users WHERE id = %s
+            """, (current_user_id,))
+            user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({"success": False, "error": "Utente non trovato"}), 404
+        
+        phone = user['phone']
+        api_id = user['api_id']
+        api_hash = decrypt_api_hash(user['api_hash_encrypted'])
+        source_chat_id = data['source_chat_id']
+        
+        # --- Gestione automatica della sessione forwarder ----------------------------------
+        session_name = f"forwarder_{hash_phone_number(phone)}_{source_chat_id}"
+        session_file = os.path.join(SESSION_DIR, f"{session_name}.session")
+
+        code_from_client: Optional[str] = data.get('code')
+
+        # SEMPRE chiediamo il codice per un nuovo forwarder
+        verification_key = f"forwarder_verification:{current_user_id}:{source_chat_id}"
+        redis_conn = get_redis_connection()
+
+        # 1) L'utente NON ha inviato alcun codice -> inviamo codice e salviamo phone_code_hash
+        if not code_from_client:
+            try:
+                async def _send_code():
+                    # Se esiste già un file sessione, rimuoviamolo per iniziare da zero
+                    if os.path.exists(session_file):
+                        os.remove(session_file)
+                        logger.info(f"Removed existing session file for {session_name}")
+                    
+                    client = TelegramClient(session_file, api_id, api_hash)
+                    await client.connect()
+                    result = await client.send_code_request(phone)
+
+                    if redis_conn:
+                        verification_data = {
+                            "phone_code_hash": result.phone_code_hash,
+                            "session_name": session_name,
+                            "api_id": api_id,
+                            "api_hash": api_hash
+                        }
+                        redis_conn.set(verification_key, json.dumps(verification_data), ex=600)
+                    await client.disconnect()
+
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(_send_code())
+                loop.close()
+
+                return jsonify({
+                    "success": True,
+                    "code_sent": True,
+                    "message": f"Codice di verifica inviato a {phone}",
+                    "phone": phone
+                }), 202  # 202 Accepted -> client deve inviare 'code'
+            except Exception as e:
+                logger.error(f"Error sending code for forwarder session: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        # 2) Abbiamo ricevuto un codice -> verifichiamo
+        else:
+            if not redis_conn or not redis_conn.exists(verification_key):
+                return jsonify({"success": False, "error": "Richiesta di verifica scaduta o assente"}), 400
+
+            try:
+                verification_data = json.loads(redis_conn.get(verification_key))
+
+                async def _verify_code():
+                    client = TelegramClient(session_file, verification_data['api_id'], verification_data['api_hash'])
+                    await client.connect()
+                    await client.sign_in(phone, code_from_client, phone_code_hash=verification_data['phone_code_hash'])
+                    authorized = await client.is_user_authorized()
+                    await client.disconnect()
+                    return authorized
+
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                ok = loop.run_until_complete(_verify_code())
+                loop.close()
+
+                if not ok:
+                    return jsonify({"success": False, "error": "Codice non valido"}), 400
+
+                # Puliamo la chiave redis e proseguiamo con la creazione del container
+                redis_conn.delete(verification_key)
+                logger.info(f"Forwarder session created for {session_name}")
+            except Exception as e:
+                logger.error(f"Error verifying code for forwarder session: {e}")
+                return jsonify({"success": False, "error": str(e)}), 500
+
+        # For now, we'll use empty session string as we're using file session
+        session_string = ""
+        
+        # Resolve target name if not provided
+        target_name = data.get('target_name', '')
+        if not target_name:
+            try:
+                # Try to get target entity name
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
+                async def get_target_name():
+                    try:
+                        if data['target_type'] == 'user' and data['target_id'].startswith('@'):
+                            entity = await client.get_entity(data['target_id'])
+                        else:
+                            entity = await client.get_entity(int(data['target_id']))
+                        
+                        if hasattr(entity, 'username') and entity.username:
+                            return f"@{entity.username}"
+                        elif hasattr(entity, 'first_name'):
+                            return f"{entity.first_name} {getattr(entity, 'last_name', '')}".strip()
+                        elif hasattr(entity, 'title'):
+                            return entity.title
+                        else:
+                            return data['target_id']
+                    except:
+                        return data['target_id']
+                
+                target_name = loop.run_until_complete(get_target_name())
+                loop.close()
+            except:
+                target_name = data['target_id']
+        
+        # Build forwarder image if needed
+        forwarder_manager = ForwarderManager()
+        if not forwarder_manager.build_forwarder_image():
+            return jsonify({"success": False, "error": "Impossibile creare l'immagine Docker per il forwarder"}), 500
+        
+        # Get forwarder-specific session file path
+        session_name = f"forwarder_{hash_phone_number(phone)}_{source_chat_id}"
+        forwarder_session_file = os.path.join(SESSION_DIR, f"{session_name}.session")
+        
+        # Create container
+        success, container_name, message = forwarder_manager.create_forwarder_container(
+            user_id=current_user_id,
+            phone=phone,
+            api_id=api_id,
+            api_hash=api_hash,
+            session_string=session_string,
+            source_chat_id=data['source_chat_id'],
+            source_chat_title=data['source_chat_title'],
+            target_type=data['target_type'],
+            target_id=data['target_id'],
+            target_name=target_name,
+            session_file_path=forwarder_session_file
+        )
+        
+        if not success:
+            return jsonify({"success": False, "error": f"Errore creazione container: {message}"}), 500
+        
+        # Save to database
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                INSERT INTO forwarders (
+                    user_id, source_chat_id, source_chat_title, 
+                    target_type, target_id, target_name, 
+                    container_name, status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                current_user_id, data['source_chat_id'], data['source_chat_title'],
+                data['target_type'], data['target_id'], target_name,
+                container_name, 'running'
+            ))
+            
+            forwarder_id = cursor.fetchone()['id']
+            db.commit()
+        
+        logger.info(f"Created forwarder {forwarder_id} with container {container_name}")
+        
+        return jsonify({
+            "success": True,
+            "message": "Inoltro creato con successo",
+            "forwarder_id": forwarder_id,
+            "container_name": container_name
+        }), 201
+        
+    except Exception as e:
+        if db:
+            db.rollback()
+        logger.error(f"Error creating forwarder: {e}")
+        return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+@app.route('/api/forwarders/<int:forwarder_id>', methods=['DELETE'])
+@jwt_required()
+def delete_forwarder(forwarder_id):
+    """Delete a forwarder and its container"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+    
+    try:
+        # Verify ownership
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT container_name 
+                FROM forwarders 
+                WHERE id = %s AND user_id = %s
+            """, (forwarder_id, current_user_id))
+            forwarder = cursor.fetchone()
+        
+        if not forwarder:
+            logger.warning(f"Forwarder {forwarder_id} not found for user {current_user_id}")
+            return jsonify({"success": False, "error": "Inoltro non trovato"}), 404
+        
+        container_name = forwarder['container_name']
+        logger.info(f"Attempting to delete forwarder {forwarder_id} with container {container_name}")
+        
+        # Stop and remove container (this will succeed even if container doesn't exist)
+        forwarder_manager = ForwarderManager()
+        success, message = forwarder_manager.stop_and_remove_container(container_name)
+        
+        logger.info(f"Container removal result: success={success}, message={message}")
+        
+        # Delete from database regardless of container removal status
+        with db.cursor() as cursor:
+            cursor.execute("DELETE FROM forwarders WHERE id = %s", (forwarder_id,))
+            db.commit()
+        
+        # Force a small delay to ensure transaction is visible
+        time.sleep(0.1)
+        
+        logger.info(f"Successfully deleted forwarder {forwarder_id} from database")
+        
+        return jsonify({
+            "success": True,
+            "message": "Inoltro eliminato con successo",
+            "container_removed": success,
+            "container_message": message
+        }), 200
+            
+    except Exception as e:
+        if db:
+            db.rollback()
+        logger.error(f"Error deleting forwarder {forwarder_id}: {e}")
+        return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+@app.route('/api/forwarders/<int:forwarder_id>/restart', methods=['POST'])
+@jwt_required()
+def restart_forwarder(forwarder_id):
+    """Restart a forwarder container"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+    
+    try:
+        # Verify ownership
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT container_name 
+                FROM forwarders 
+                WHERE id = %s AND user_id = %s
+            """, (forwarder_id, current_user_id))
+            forwarder = cursor.fetchone()
+        
+        if not forwarder:
+            return jsonify({"success": False, "error": "Inoltro non trovato"}), 404
+        
+        # Restart container
+        forwarder_manager = ForwarderManager()
+        success, message = forwarder_manager.restart_container(forwarder['container_name'])
+        
+        if success:
+            # Update status in database
+            with db.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE forwarders 
+                    SET status = 'running' 
+                    WHERE id = %s
+                """, (forwarder_id,))
+                db.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "Container riavviato con successo"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": f"Errore riavvio: {message}"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error restarting forwarder: {e}")
+        return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+@app.route('/api/forwarders/cleanup-orphaned', methods=['POST'])
+@jwt_required()
+def cleanup_orphaned_forwarders():
+    """Clean up forwarders that exist in database but don't have containers"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+    
+    try:
+        # Get all forwarders for the user
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT id, container_name 
+                FROM forwarders 
+                WHERE user_id = %s
+            """, (current_user_id,))
+            forwarders = cursor.fetchall()
+        
+        orphaned_count = 0
+        forwarder_manager = ForwarderManager()
+        
+        for forwarder in forwarders:
+            container_status = forwarder_manager.get_container_status(forwarder['container_name'])
+            
+            # If container doesn't exist, mark as orphaned
+            if container_status['status'] == 'not_found':
+                logger.info(f"Found orphaned forwarder {forwarder['id']} with container {forwarder['container_name']}")
+                
+                # Delete from database
+                with db.cursor() as cursor:
+                    cursor.execute("DELETE FROM forwarders WHERE id = %s", (forwarder['id'],))
+                
+                orphaned_count += 1
+        
+        if orphaned_count > 0:
+            db.commit()
+            logger.info(f"Cleaned up {orphaned_count} orphaned forwarders for user {current_user_id}")
+        
+        return jsonify({
+            "success": True,
+            "message": f"Pulizia completata. Rimossi {orphaned_count} inoltri orfani.",
+            "orphaned_count": orphaned_count
+        }), 200
+        
+    except Exception as e:
+        if db:
+            db.rollback()
+        logger.error(f"Error cleaning up orphaned forwarders: {e}")
+        return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+# ============================================
+# Application Bootstrap
+# ============================================
+
+def create_app():
+    with app.app_context():
+        get_db_connection()
+        get_redis_connection()
+    return app
+
+if __name__ == '__main__':
+    app = create_app()
+    app.run(host='0.0.0.0', port=5000, debug=True) 
