@@ -1606,8 +1606,7 @@ def prepare_forwarder():
         
         # Build forwarder image if needed
         forwarder_manager = ForwarderManager()
-        if not forwarder_manager.build_forwarder_image():
-            return jsonify({"success": False, "error": "Impossibile creare l'immagine Docker per il forwarder"}), 500
+        # Image is ensured in ForwarderManager.__init__()
         
         # Get forwarder-specific session file path
         session_name = f"forwarder_{hash_phone_number(phone)}_{source_chat_id}"
@@ -1923,8 +1922,7 @@ def create_forwarder():
         
         # Build forwarder image if needed
         forwarder_manager = ForwarderManager()
-        if not forwarder_manager.build_forwarder_image():
-            return jsonify({"success": False, "error": "Impossibile creare l'immagine Docker per il forwarder"}), 500
+        # Image is ensured in ForwarderManager.__init__()
         
         # Get forwarder-specific session file path
         session_name = f"forwarder_{hash_phone_number(phone)}_{source_chat_id}"
