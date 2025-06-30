@@ -4,23 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Solanagram{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/menu.css') }}?v=202506180001">
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=202506180001">
     {% block head %}{% endblock %}
 </head>
 <body>
-    <nav class="navbar">
-        <div class="nav-container">
-            <div class="nav-brand">
-                <h1>🔐 Solanagram</h1>
-            </div>
-            <div class="nav-menu">
-                <a href="/dashboard" class="nav-link">Dashboard</a>
-                <a href="/chats" class="nav-link">Chat</a>
-                <a href="/settings" class="nav-link">Impostazioni</a>
-                <a href="#" onclick="logout()" class="nav-link">Logout</a>
-            </div>
-        </div>
-    </nav>
+    {% include 'menu.html' %}
 
     <main class="main-content">
         {% block content %}{% endblock %}

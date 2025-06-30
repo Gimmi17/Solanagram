@@ -16,6 +16,9 @@ import requests
 from datetime import datetime
 from functools import wraps
 
+# Import menu utilities
+from menu_utils import get_unified_menu, get_logout_script
+
 # Configurazione logging
 logging.basicConfig(
     level=logging.INFO,
@@ -138,10 +141,56 @@ BASE_TEMPLATE = """
             100% { transform: rotate(360deg); } 
         }
         
-        /* Navigation */
-        .nav { margin-bottom: 20px; text-align: center; }
-        .nav a { margin: 0 10px; color: #3498db; text-decoration: none; }
-        .nav a:hover { text-decoration: underline; }
+        /* Unified Menu Styles - Aligned with site design */
+        .nav {
+            margin-bottom: 20px;
+            text-align: center;
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .nav-link {
+            display: inline-block;
+            margin: 0 10px;
+            color: #3498db;
+            text-decoration: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            border: 1px solid transparent;
+        }
+        
+        .nav-link:hover {
+            background: #3498db;
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+        }
+        
+        .nav-link.active {
+            background: #3498db;
+            color: white;
+            border-color: #2980b9;
+            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+        }
+        
+        /* Mobile responsive */
+        @media (max-width: 768px) {
+            .nav {
+                padding: 0.5rem;
+            }
+            
+            .nav-link {
+                display: block;
+                margin: 5px 0;
+                padding: 0.5rem 1rem;
+                font-size: 0.9rem;
+            }
+        }
     </style>
 </head>
 <body>
@@ -162,17 +211,12 @@ BASE_TEMPLATE = """
         // Utility functions
         async function makeRequest(url, options = {}) {
             try {
-                const token = localStorage.getItem('session_token');
-                console.log('makeRequest - URL:', url, 'Token:', token ? 'present' : 'missing');
+                console.log('makeRequest - URL:', url);
                 
                 const headers = {
                     'Content-Type': 'application/json',
                     ...options.headers
                 };
-                
-                if (token) {
-                    headers['Authorization'] = `Bearer ${token}`;
-                }
                 
                 console.log('makeRequest - Headers:', headers);
                 
@@ -220,15 +264,15 @@ BASE_TEMPLATE = """
                         method: 'POST'
                     });
                     
-                    localStorage.removeItem('session_token');
-                    
+                    // Reindirizza al login
                     if (result && result.redirect) {
                         window.location.href = result.redirect;
                     } else {
                         window.location.href = '/login';
                     }
                 } catch (error) {
-                    localStorage.removeItem('session_token');
+                    console.error('Errore durante logout:', error);
+                    // Anche in caso di errore, reindirizza al login
                     window.location.href = '/login';
                 }
             }
@@ -320,6 +364,13 @@ def login():
         ℹ️ Inserisci il numero di telefono per accedere
     </div>
     
+    <div class="status success" style="margin-bottom: 20px;">
+        🔑 <strong>Sistema Future Auth Tokens Attivo</strong><br>
+        Il sistema utilizza i token di autenticazione ufficiali di Telegram.<br>
+        Se hai effettuato il login recentemente, puoi riutilizzare i token salvati senza richiedere nuovi codici SMS.<br>
+        <small>Questo sistema ufficiale evita completamente i limiti di richieste a Telegram.</small>
+    </div>
+    
     <form id="loginForm">
         <div class="form-group">
             <label for="phone_number">Numero di telefono</label>
@@ -347,6 +398,18 @@ def login():
             </div>
         </div>
         
+        <div id="futureTokensSection" style="display: none;">
+            <div class="status success">
+                🔑 <strong>Token di autenticazione disponibili!</strong>
+                <br>Hai token di autenticazione salvati che possono essere riutilizzati.
+                <br><small>Questo sistema ufficiale Telegram evita di richiedere nuovi codici SMS.</small>
+            </div>
+            <div class="form-actions" style="margin-top: 10px;">
+                <button type="button" id="useFutureTokens" class="btn success">🔄 Usa token salvati</button>
+                <button type="button" id="requestNewCode" class="btn">📱 Richiedi nuovo codice</button>
+            </div>
+        </div>
+        
         <div class="loading">
             <div class="spinner"></div>
             <p>Invio codice di verifica...</p>
@@ -367,24 +430,24 @@ def login():
             const phone = this.value.trim();
             if (phone) {
                 try {
-                    const result = await makeRequest(`/api/auth/check-cached-code?phone=${encodeURIComponent(phone)}`, {
+                    const result = await makeRequest(`/api/auth/check-future-tokens?phone=${encodeURIComponent(phone)}`, {
                         method: 'GET'
                     });
                     
-                    if (result.success && result.has_cached_code) {
-                        document.getElementById('cachedCodeSection').style.display = 'block';
+                    if (result.success && result.has_future_tokens) {
+                        document.getElementById('futureTokensSection').style.display = 'block';
                         currentPhone = phone;
                     } else {
-                        document.getElementById('cachedCodeSection').style.display = 'none';
+                        document.getElementById('futureTokensSection').style.display = 'none';
                     }
                 } catch (error) {
-                    console.log('Errore nel controllo codice cache:', error);
+                    console.log('Errore nel controllo future tokens:', error);
                 }
             }
         });
         
-        // Usa codice in cache
-        document.getElementById('useCachedCode').addEventListener('click', async function() {
+        // Usa future auth tokens
+        document.getElementById('useFutureTokens').addEventListener('click', async function() {
             const password = document.getElementById('password').value.trim();
             
             if (!currentPhone || !password) {
@@ -395,25 +458,31 @@ def login():
             showLoading();
             
             try {
-                const result = await makeRequest('/api/auth/use-cached-code', {
+                const result = await makeRequest('/api/auth/login', {
                     method: 'POST',
                     body: JSON.stringify({ 
-                        phone: currentPhone
+                        phone_number: currentPhone,
+                        password: password 
                     })
                 });
                 
                 if (result.success) {
-                    // Salva dati per la verifica
-                    localStorage.setItem('temp_phone', currentPhone);
-                    
-                    showMessage(result.message, 'success');
-                    
-                    // Redirect a pagina verifica codice
-                    setTimeout(() => {
-                        window.location.href = '/verify-code';
-                    }, 2000);
+                    if (result.direct_login) {
+                        // Login diretto con token
+                        showMessage(result.message, 'success');
+                        setTimeout(() => {
+                            window.location.href = '/dashboard';
+                        }, 2000);
+                    } else {
+                        // Salva dati per la verifica
+                        localStorage.setItem('temp_phone', currentPhone);
+                        showMessage(result.message, 'success');
+                        setTimeout(() => {
+                            window.location.href = '/verify-code';
+                        }, 2000);
+                    }
                 } else {
-                    showMessage(result.error || 'Errore nell\'uso del codice cache', 'error');
+                    showMessage(result.error || 'Errore nel login', 'error');
                 }
             } catch (error) {
                 showMessage('Errore di connessione', 'error');
@@ -423,9 +492,39 @@ def login():
         });
         
         // Richiedi nuovo codice
-        document.getElementById('requestNewCode').addEventListener('click', function() {
-            document.getElementById('cachedCodeSection').style.display = 'none';
-            document.getElementById('loginForm').dispatchEvent(new Event('submit'));
+        document.getElementById('requestNewCode').addEventListener('click', async function() {
+            const phone = document.getElementById('phone_number').value.trim();
+            const password = document.getElementById('password').value.trim();
+            
+            if (!phone || !password) {
+                showMessage('Inserisci numero di telefono e password', 'error');
+                return;
+            }
+            
+            showLoading();
+            
+            const result = await makeRequest('/api/auth/login', {
+                method: 'POST',
+                body: JSON.stringify({ 
+                    phone_number: phone,
+                    password: password 
+                })
+            });
+            
+            hideLoading();
+            
+            if (result.success) {
+                // Salva dati per la verifica
+                localStorage.setItem('temp_phone', phone);
+                showMessage(result.message, 'success');
+                
+                // Redirect a pagina verifica codice
+                setTimeout(() => {
+                    window.location.href = '/verify-code';
+                }, 2000);
+            } else {
+                showMessage(result.error || 'Errore nel login', 'error');
+            }
         });
         
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
@@ -463,7 +562,30 @@ def login():
                     window.location.href = '/verify-code';
                 }, 2000);
             } else {
-                showMessage(result.error || 'Errore durante il login', 'error');
+                // Gestione speciale per FLOOD_WAIT
+                if (result.error && result.error.includes('FLOOD_WAIT')) {
+                    // Estrai il tempo di attesa dal messaggio
+                    const waitMatch = result.error.match(/Attendi (\d+) secondi/);
+                    if (waitMatch) {
+                        const waitSeconds = parseInt(waitMatch[1]);
+                        const waitHours = Math.floor(waitSeconds / 3600);
+                        const waitMinutes = Math.floor((waitSeconds % 3600) / 60);
+                        
+                        let waitMessage = `🚫 <strong>Limite Telegram raggiunto!</strong><br><br>`;
+                        waitMessage += `Hai fatto troppe richieste di codici SMS in poco tempo.<br>`;
+                        waitMessage += `Telegram richiede di attendere: <strong>${waitHours} ore e ${waitMinutes} minuti</strong><br><br>`;
+                        waitMessage += `💡 <strong>Suggerimenti:</strong><br>`;
+                        waitMessage += `• Usa il sistema di cache per riutilizzare codici esistenti<br>`;
+                        waitMessage += `• Prova con un numero di telefono diverso<br>`;
+                        waitMessage += `• Aspetta che scada il limite temporaneo`;
+                        
+                        showMessage(waitMessage, 'error');
+                    } else {
+                        showMessage(result.error, 'error');
+                    }
+                } else {
+                    showMessage(result.error || 'Errore durante il login', 'error');
+                }
             }
         });
     </script>
@@ -718,15 +840,11 @@ def dashboard():
     
     user_data = user_info.get('user', {}) if user_info and user_info.get('success') else {}
     
+    # Use unified menu
+    menu_html = get_unified_menu('dashboard')
+    
     content = f"""
-    <div class="nav">
-        <a href="/dashboard">🏠 Dashboard</a>
-        <a href="/profile">👤 Profilo</a>
-        <a href="/chats">💬 Le mie Chat</a>
-        <a href="/configured-channels">⚙️ Canali Configurati</a>
-        <a href="/find">🔍 Trova Chat</a>
-        <a href="#" onclick="logout()">🚪 Logout</a>
-    </div>
+    {menu_html}
     
     <h2>📊 Dashboard</h2>
     
@@ -766,32 +884,6 @@ def dashboard():
             <p><strong>Sessione:</strong> ✅ Attiva</p>
         </div>
     </div>
-    
-    <script>
-        async function logout() {{
-            if (confirm('Sei sicuro di voler uscire?')) {{
-                try {{
-                    const result = await makeRequest('/api/auth/logout', {{
-                        method: 'POST'
-                    }});
-                    
-                    // Rimuovi il token dalla sessione locale
-                    localStorage.removeItem('session_token');
-                    
-                    // Reindirizza al login
-                    if (result && result.redirect) {{
-                        window.location.href = result.redirect;
-                    }} else {{
-                        window.location.href = '/login';
-                    }}
-                }} catch (error) {{
-                    // Anche in caso di errore, facciamo logout lato client
-                    localStorage.removeItem('session_token');
-                    window.location.href = '/login';
-                }}
-            }}
-        }}
-    </script>
     """
     
     return render_template_string(
@@ -810,14 +902,11 @@ def profile():
     user_info = call_backend('/api/user/profile', 'GET', auth_token=session['session_token'])
     user_data = user_info.get('user', {}) if user_info and user_info.get('success') else {}
     
+    # Use unified menu
+    menu_html = get_unified_menu('profile')
+    
     content = f"""
-    <div class="nav">
-        <a href="/dashboard">🏠 Dashboard</a>
-        <a href="/profile">👤 Profilo</a>
-        <a href="/chats">💬 Le mie Chat</a>
-        <a href="/find">🔍 Trova Chat</a>
-        <a href="#" onclick="logout()">🚪 Logout</a>
-    </div>
+    {menu_html}
     
     <h2>👤 Gestione Profilo</h2>
     
@@ -971,30 +1060,6 @@ def profile():
                 showMessage('Errore di connessione', 'error');
             }}
         }});
-        
-        async function logout() {{
-            if (confirm('Sei sicuro di voler uscire?')) {{
-                try {{
-                    const result = await makeRequest('/api/auth/logout', {{
-                        method: 'POST'
-                    }});
-                    
-                    // Rimuovi il token dalla sessione locale
-                    localStorage.removeItem('session_token');
-                    
-                    // Reindirizza al login
-                    if (result && result.redirect) {{
-                        window.location.href = result.redirect;
-                    }} else {{
-                        window.location.href = '/login';
-                    }}
-                }} catch (error) {{
-                    // Anche in caso di errore, facciamo logout lato client
-                    localStorage.removeItem('session_token');
-                    window.location.href = '/login';
-                }}
-            }}
-        }}
     </script>
     """
     
@@ -1010,14 +1075,11 @@ def profile():
 def chats_list():
     """Pagina lista chat (protetta)"""
     
-    content = """
-    <div class="nav">
-        <a href="/dashboard">🏠 Dashboard</a>
-        <a href="/profile">👤 Profilo</a>
-        <a href="/chats">💬 Le mie Chat</a>
-        <a href="/find">🔍 Trova Chat</a>
-        <a href="#" onclick="logout()">🚪 Logout</a>
-    </div>
+    # Use unified menu
+    menu_html = get_unified_menu('chats')
+    
+    content = f"""
+    {menu_html}
     
     <h2>💬 Le mie Chat Telegram</h2>
     
@@ -1031,9 +1093,7 @@ def chats_list():
     </div>
     
     <div id="chatsContainer" style="display: none;">
-        <div id="chatsList"></div>
-        
-        <div style="margin-top: 30px; padding: 20px; border: 1px solid #dee2e6; border-radius: 8px; background: #f8f9fa;">
+        <div style="margin-bottom: 30px; padding: 20px; border: 1px solid #dee2e6; border-radius: 8px; background: #f8f9fa;">
             <h3>🔍 Filtra chat</h3>
             <div class="form-group">
                 <input type="text" id="searchFilter" placeholder="Cerca per nome, ID o username..." 
@@ -1041,6 +1101,8 @@ def chats_list():
                 <small>Ricerca in tempo reale - prova "ROS" per trovare "Rossetto"</small>
             </div>
         </div>
+        
+        <div id="chatsList"></div>
     </div>
     
     <div id="errorContainer" style="display: none;">
@@ -1057,17 +1119,17 @@ def chats_list():
         // Carica le chat all'avvio
         document.addEventListener('DOMContentLoaded', loadChats);
         
-        async function loadChats() {
+        async function loadChats() {{
             showLoading();
             
-            try {
-                const result = await makeRequest('/api/telegram/get-chats', {
+            try {{
+                const result = await makeRequest('/api/telegram/get-chats', {{
                     method: 'GET'
-                });
+                }});
                 
                 hideLoading();
                 
-                if (result.success) {
+                if (result.success) {{
                     allChats = result.chats;
                     filteredChats = [...allChats];
                     
@@ -1081,88 +1143,88 @@ def chats_list():
                     // Setup filtro di ricerca
                     document.getElementById('searchFilter').addEventListener('input', filterChats);
                     
-                } else {
+                }} else {{
                     // Controlla se è un errore di autorizzazione persa
-                    if (result.error && result.error.includes('Authorization lost')) {
+                    if (result.error && result.error.includes('Authorization lost')) {{
                         showReactivationPrompt();
-                    } else {
+                    }} else {{
                         showError(result.error || 'Errore durante il caricamento chat');
-                    }
-                }
-            } catch (error) {
+                    }}
+                }}
+            }} catch (error) {{
                 hideLoading();
                 showError('Errore di connessione');
-            }
-        }
+            }}
+        }}
         
-        function renderChats() {
+        function renderChats() {{
             const container = document.getElementById('chatsList');
             
-            if (filteredChats.length === 0) {
+            if (filteredChats.length === 0) {{
                 container.innerHTML = `
                     <div class="status warning">
                         <p>🔍 Nessuna chat trovata con i criteri di ricerca</p>
                     </div>
                 `;
                 return;
-            }
+            }}
             
             container.innerHTML = `
                 <div style="margin-bottom: 20px;">
-                    <strong>📊 ${filteredChats.length} chat trovate (su ${allChats.length} totali)</strong>
+                    <strong>📊 ${{filteredChats.length}} chat trovate (su ${{allChats.length}} totali)</strong>
                 </div>
                 
-                ${filteredChats.map(chat => `
+                ${{filteredChats.map(chat => `
                     <div class="card" style="margin-bottom: 15px;">
                         <div style="display: flex; justify-content: between; align-items: start;">
                             <div style="flex: 1;">
-                                <h3>${escapeHtml(chat.title)} ${getChatIcon(chat.type)}</h3>
+                                <h3>${{escapeHtml(chat.title)}} ${{getChatIcon(chat.type)}}</h3>
                                 <p><strong>ID:</strong> 
-                                    <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${chat.id}</code>
-                                    <button onclick="copyToClipboard('${chat.id}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
+                                    <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${{chat.id}}</code>
+                                    <button onclick="copyToClipboard('${{chat.id}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
                                 </p>
-                                <p><strong>Tipo:</strong> ${getChatTypeLabel(chat.type)}</p>
-                                ${chat.username ? `<p><strong>Username:</strong> @${chat.username} 
-                                    <button onclick="copyToClipboard('@${chat.username}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
-                                </p>` : ''}
-                                ${chat.members_count ? `<p><strong>Membri:</strong> ${chat.members_count}</p>` : ''}
-                                ${chat.description ? `<p><strong>Descrizione:</strong> ${escapeHtml(chat.description.substring(0, 100))}${chat.description.length > 100 ? '...' : ''}</p>` : ''}
-                                ${chat.unread_count ? `<p><strong>Non letti:</strong> ${chat.unread_count} messaggi</p>` : ''}
-                                ${chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${new Date(chat.last_message_date).toLocaleDateString('it-IT')}</p>` : ''}
+                                <p><strong>Tipo:</strong> ${{getChatTypeLabel(chat.type)}}</p>
+                                ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}} 
+                                    <button onclick="copyToClipboard('@${{chat.username}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
+                                </p>` : ''}}
+                                ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
+                                ${{chat.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(chat.description.substring(0, 100))}}${{chat.description.length > 100 ? '...' : ''}}</p>` : ''}}
+                                ${{chat.unread_count ? `<p><strong>Non letti:</strong> ${{chat.unread_count}} messaggi</p>` : ''}}
+                                ${{chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(chat.last_message_date).toLocaleDateString('it-IT')}}</p>` : ''}}
                                 
                                 <div style="margin-top: 15px;">
-                                    <a href="/forwarders/${chat.id}" class="btn btn-primary">
+                                    <a href="/forwarders/${{chat.id}}" class="btn btn-primary">
                                         🔄 Vedi inoltri
                                     </a>
                                 </div>
                             </div>
                         </div>
                     </div>
-                `).join('')}
+                `).join('')}}
             `;
-        }
+        }}
         
-        function filterChats() {
+        function filterChats() {{
             const query = document.getElementById('searchFilter').value.toLowerCase().trim();
             
-            if (!query) {
+            if (!query) {{
                 filteredChats = [...allChats];
-            } else {
+            }} else {{
                 filteredChats = allChats.filter(chat => 
                     chat.title.toLowerCase().includes(query) ||
                     chat.id.toString().includes(query) ||
                     (chat.username && chat.username.toLowerCase().includes(query)) ||
                     (chat.description && chat.description.toLowerCase().includes(query))
                 );
-            }
+            }}
             
             renderChats();
-        }
+        }}
         
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                showMessage(`Copiato: ${text}`, 'success');
-            }).catch(() => {
+        function copyToClipboard(text) {{
+            navigator.clipboard.writeText(text).then(() => {{
+                showMessage(`Copiato: ${{text}}`, 'success');
+            }}).catch(() => {{
                 // Fallback per browser più vecchi
                 const textarea = document.createElement('textarea');
                 textarea.value = text;
@@ -1170,134 +1232,60 @@ def chats_list():
                 textarea.select();
                 document.execCommand('copy');
                 document.body.removeChild(textarea);
-                showMessage(`Copiato: ${text}`, 'success');
-            });
-        }
+                showMessage(`Copiato: ${{text}}`, 'success');
+            }});
+        }}
         
-        function getChatIcon(type) {
-            switch(type) {
+        function getChatIcon(type) {{
+            switch(type) {{
                 case 'private': return '👤';
                 case 'group': return '👥';
                 case 'supergroup': return '👥';
                 case 'channel': return '📢';
                 default: return '💬';
-            }
-        }
+            }}
+        }}
         
-        function getChatTypeLabel(type) {
-            switch(type) {
+        function getChatTypeLabel(type) {{
+            switch(type) {{
                 case 'private': return 'Chat privata';
                 case 'group': return 'Gruppo';
                 case 'supergroup': return 'Supergruppo';
                 case 'channel': return 'Canale';
                 default: return type;
-            }
-        }
+            }}
+        }}
         
-        function escapeHtml(text) {
+        function escapeHtml(text) {{
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
-        }
+        }}
         
-        function showError(message) {
+        function showError(message) {{
             document.getElementById('errorMessage').textContent = message;
             document.getElementById('errorContainer').style.display = 'block';
             document.getElementById('chatsContainer').style.display = 'none';
-        }
+        }}
         
-        function showReactivationPrompt() {
-            document.getElementById('errorContainer').innerHTML = `
-                <div class="status warning">
-                    <h3>🔄 Sessione Telegram Scaduta</h3>
-                    <p>La tua sessione Telegram è scaduta. Per continuare a usare le chat, devi riattivare la connessione.</p>
-                    <div style="margin-top: 15px;">
-                        <button onclick="reactivateSession()" class="btn">🔄 Riattiva Sessione</button>
-                    </div>
+        function showReactivationPrompt() {{
+            document.getElementById('errorContainer').style.display = 'block';
+            document.getElementById('errorMessage').innerHTML = `
+                <div style="text-align: center; padding: 20px;">
+                    <h3>🔐 Sessione Telegram scaduta</h3>
+                    <p>La tua sessione Telegram è scaduta. Devi riattivarla per continuare.</p>
+                    <br>
+                    <a href="/dashboard" class="btn btn-primary">🔄 Riattiva Sessione</a>
                 </div>
             `;
-            document.getElementById('errorContainer').style.display = 'block';
-            document.getElementById('chatsContainer').style.display = 'none';
-        }
-        
-        async function reactivateSession() {
-            showLoading();
-            
-            try {
-                const result = await makeRequest('/api/auth/reactivate-session', {
-                    method: 'POST'
-                });
-                
-                hideLoading();
-                
-                if (result.success) {
-                    // Chiedi il codice di verifica
-                    const code = prompt('Inserisci il codice di verifica inviato su Telegram:');
-                    if (code) {
-                        await verifyReactivationCode(code);
-                    }
-                } else {
-                    showError(result.error || 'Errore durante la riattivazione');
-                }
-            } catch (error) {
-                hideLoading();
-                showError('Errore di connessione durante la riattivazione');
-            }
-        }
-        
-        async function verifyReactivationCode(code) {
-            showLoading();
-            
-            try {
-                const result = await makeRequest('/api/auth/verify-session-code', {
-                    method: 'POST',
-                    body: JSON.stringify({ code: code })
-                });
-                
-                hideLoading();
-                
-                if (result.success) {
-                    // Ricarica le chat
-                    window.location.reload();
-                } else {
-                    showError(result.error || 'Codice non valido');
-                }
-            } catch (error) {
-                hideLoading();
-                showError('Errore durante la verifica del codice');
-            }
-        }
-        
-        async function logout() {
-            if (confirm('Sei sicuro di voler uscire?')) {
-                try {
-                    const result = await makeRequest('/api/auth/logout', {
-                        method: 'POST'
-                    });
-                    
-                    // Rimuovi il token dalla sessione locale
-                    localStorage.removeItem('session_token');
-                    
-                    // Reindirizza al login
-                    if (result && result.redirect) {
-                        window.location.href = result.redirect;
-                    } else {
-                        window.location.href = '/login';
-                    }
-                } catch (error) {
-                    // Anche in caso di errore, facciamo logout lato client
-                    localStorage.removeItem('session_token');
-                    window.location.href = '/login';
-                }
-            }
-        }
+        }}
     </script>
     """
     
     return render_template_string(
         BASE_TEMPLATE,
         title="Le mie Chat",
-        subtitle="Lista completa delle chat Telegram",
+        subtitle="Gestione chat Telegram",
         content=Markup(content)
     )
 
@@ -1306,14 +1294,11 @@ def chats_list():
 def find_chat():
     """Pagina ricerca chat (protetta)"""
     
-    content = """
-    <div class="nav">
-        <a href="/dashboard">🏠 Dashboard</a>
-        <a href="/profile">👤 Profilo</a>
-        <a href="/chats">💬 Le mie Chat</a>
-        <a href="/find">🔍 Trova Chat</a>
-        <a href="#" onclick="logout()">🚪 Logout</a>
-    </div>
+    # Use unified menu
+    menu_html = get_unified_menu('find')
+    
+    content = f"""
+    {menu_html}
     
     <h2>🔍 Trova Chat Telegram</h2>
     
@@ -1342,68 +1327,44 @@ def find_chat():
     <div id="result" style="margin-top: 30px;"></div>
     
     <script>
-        document.getElementById('searchForm').addEventListener('submit', async (e) => {
+        document.getElementById('searchForm').addEventListener('submit', async (e) => {{
             e.preventDefault();
             
             const query = document.getElementById('query').value.trim();
-            if (!query) {
+            if (!query) {{
                 showMessage('Inserisci una query di ricerca', 'error');
                 return;
-            }
+            }}
             
             showLoading();
             
-            const result = await makeRequest('/api/telegram/find-chat', {
+            const result = await makeRequest('/api/telegram/find-chat', {{
                 method: 'POST',
-                body: JSON.stringify({ query: query })
-            });
+                body: JSON.stringify({{ query: query }})
+            }});
             
             hideLoading();
             
-            if (result.success) {
+            if (result.success) {{
                 const chat = result.chat;
                 document.getElementById('result').innerHTML = `
                     <div class="card">
                         <h3>✅ Chat trovata!</h3>
-                        <p><strong>ID:</strong> <code>${chat.id}</code></p>
-                        <p><strong>Titolo:</strong> ${chat.title}</p>
-                        <p><strong>Tipo:</strong> ${chat.type}</p>
-                        ${chat.username ? `<p><strong>Username:</strong> @${chat.username}</p>` : ''}
-                        ${chat.members_count ? `<p><strong>Membri:</strong> ${chat.members_count}</p>` : ''}
+                        <p><strong>ID:</strong> <code>${{chat.id}}</code></p>
+                        <p><strong>Titolo:</strong> ${{chat.title}}</p>
+                        <p><strong>Tipo:</strong> ${{chat.type}}</p>
+                        ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}}</p>` : ''}}
+                        ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
                         <br>
                         <small>⚠️ Risultato MOCK per test - implementazione Telegram in corso</small>
                     </div>
                 `;
                 showMessage('Chat trovata con successo!', 'success');
-            } else {
+            }} else {{
                 document.getElementById('result').innerHTML = '';
                 showMessage(result.error || 'Chat non trovata', 'error');
-            }
-        });
-        
-        async function logout() {
-            if (confirm('Sei sicuro di voler uscire?')) {
-                try {
-                    const result = await makeRequest('/api/auth/logout', {
-                        method: 'POST'
-                    });
-                    
-                    // Rimuovi il token dalla sessione locale
-                    localStorage.removeItem('session_token');
-                    
-                    // Reindirizza al login
-                    if (result && result.redirect) {
-                        window.location.href = result.redirect;
-                    } else {
-                        window.location.href = '/login';
-                    }
-                } catch (error) {
-                    // Anche in caso di errore, facciamo logout lato client
-                    localStorage.removeItem('session_token');
-                    window.location.href = '/login';
-                }
-            }
-        }
+            }}
+        }});
     </script>
     """
     
@@ -1417,42 +1378,27 @@ def find_chat():
 @app.route('/configured-channels')
 @require_auth
 def configured_channels():
-    """Pagina canali configurati (protetta)"""
+    """Pagina lista reindirizzamenti raggruppati per canale (protetta)"""
     
-    content = """
-    <div class="nav">
-        <a href="/dashboard">🏠 Dashboard</a>
-        <a href="/profile">👤 Profilo</a>
-        <a href="/chats">💬 Le mie Chat</a>
-        <a href="/configured-channels">⚙️ Canali Configurati</a>
-        <a href="/find">🔍 Trova Chat</a>
-        <a href="#" onclick="logout()">🚪 Logout</a>
-    </div>
+    # Use unified menu
+    menu_html = get_unified_menu('configured-channels')
     
-    <h2>⚙️ Canali Configurati</h2>
+    content = f"""
+    {menu_html}
+    
+    <h2>🔄 Tutti i Reindirizzamenti</h2>
     
     <div class="status info">
-        ℹ️ Questi sono i canali specificamente configurati nel sistema
+        ℹ️ Visualizzazione di tutti i reindirizzamenti raggruppati per canale di origine
     </div>
     
     <div class="loading">
         <div class="spinner"></div>
-        <p>Caricamento canali configurati...</p>
+        <p>Caricamento reindirizzamenti...</p>
     </div>
     
-    <div id="configuredChannelsContainer" style="display: none;">
-        <div id="configuredChannelsList"></div>
-        
-        <div style="margin-top: 30px; padding: 20px; border: 1px solid #dee2e6; border-radius: 8px; background: #f8f9fa;">
-            <h3>🔧 Configurazione Ambiente</h3>
-            <p>Per aggiungere nuovi canali configurati, modifica le variabili d'ambiente:</p>
-            <pre style="background: #2d3748; color: #e2e8f0; padding: 15px; border-radius: 8px; overflow-x: auto;">
-# Nel file .env
-PRIMARY_CHANNEL_ID=-1001234567890
-SECONDARY_CHANNEL_ID=-1002345678901
-BACKUP_CHANNEL_ID=-1003456789012</pre>
-            <small>Riavvia il backend dopo aver modificato il file .env</small>
-        </div>
+    <div id="forwardersContainer" style="display: none;">
+        <div id="forwardersList"></div>
     </div>
     
     <div id="errorContainer" style="display: none;">
@@ -1463,219 +1409,227 @@ BACKUP_CHANNEL_ID=-1003456789012</pre>
     </div>
     
     <script>
-        document.addEventListener('DOMContentLoaded', loadConfiguredChannels);
+        document.addEventListener('DOMContentLoaded', loadAllForwarders);
         
-        async function loadConfiguredChannels() {
+        async function loadAllForwarders() {{
             showLoading();
             
-            try {
-                const result = await makeRequest('/api/telegram/get-configured-channels', {
+            try {{
+                const result = await makeRequest('/api/forwarders/all', {{
                     method: 'GET'
-                });
+                }});
                 
                 hideLoading();
                 
-                if (result.success) {
-                    renderConfiguredChannels(result.configured_channels);
-                    document.getElementById('configuredChannelsContainer').style.display = 'block';
-                } else {
-                    showError(result.error || 'Errore durante il caricamento canali configurati');
-                }
-            } catch (error) {
+                if (result.success) {{
+                    renderAllForwarders(result.forwarders_by_channel);
+                    document.getElementById('forwardersContainer').style.display = 'block';
+                }} else {{
+                    showError(result.error || 'Errore durante il caricamento reindirizzamenti');
+                }}
+            }} catch (error) {{
                 hideLoading();
                 showError('Errore di connessione');
-            }
-        }
+            }}
+        }}
         
-        function renderConfiguredChannels(channels) {
-            const container = document.getElementById('configuredChannelsList');
+        function renderAllForwarders(forwardersByChannel) {{
+            const container = document.getElementById('forwardersList');
             
-            if (channels.length === 0) {
+            if (!forwardersByChannel || Object.keys(forwardersByChannel).length === 0) {{
                 container.innerHTML = `
                     <div class="status warning">
-                        <h3>🔧 Nessun canale configurato</h3>
-                        <p>Non ci sono canali configurati nelle variabili d'ambiente.</p>
-                        <p>Aggiungi PRIMARY_CHANNEL_ID, SECONDARY_CHANNEL_ID, ecc. nel file .env</p>
+                        <h3>📭 Nessun reindirizzamento configurato</h3>
+                        <p>Non ci sono reindirizzamenti attivi nel sistema.</p>
+                        <p>Vai alla pagina <a href="/chats">Le mie Chat</a> per creare nuovi reindirizzamenti.</p>
                     </div>
                 `;
                 return;
-            }
+            }}
+            
+            let totalForwarders = 0;
+            Object.values(forwardersByChannel).forEach(channel => {{
+                totalForwarders += channel.forwarders.length;
+            }});
             
             container.innerHTML = `
                 <div style="margin-bottom: 20px;">
-                    <strong>📊 ${channels.length} canali configurati nel sistema</strong>
+                    <strong>📊 ${{totalForwarders}} reindirizzamenti totali in ${{Object.keys(forwardersByChannel).length}} canali</strong>
                 </div>
                 
-                ${channels.map(channel => `
-                    <div class="card" style="margin-bottom: 15px;">
-                        <div style="display: flex; justify-content: between; align-items: start;">
-                            <div style="flex: 1;">
-                                <h3>${getChannelIcon(channel.name)} ${channel.name.toUpperCase()} 
-                                    <span class="badge" style="background: #28a745; color: white; padding: 2px 8px; border-radius: 12px; font-size: 11px;">CONFIGURATO</span>
-                                </h3>
-                                <p><strong>ID:</strong> 
-                                    <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${channel.id}</code>
-                                    <button onclick="copyToClipboard('${channel.id}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
-                                </p>
-                                <p><strong>Priorità:</strong> ${channel.priority}</p>
-                                
-                                <div style="margin-top: 15px;">
-                                    <button onclick="executeChannelAction('${channel.id}', 'info')" class="btn btn-primary" style="margin-right: 10px;">
-                                        ℹ️ Info Canale
-                                    </button>
-                                    <button onclick="executeChannelAction('${channel.id}', 'recent_messages')" class="btn btn-primary" style="margin-right: 10px;">
-                                        💬 Messaggi Recenti
-                                    </button>
-                                    <button onclick="executeChannelAction('${channel.id}', 'members')" class="btn btn-primary">
-                                        👥 Membri (primi 100)
-                                    </button>
-                                </div>
-                            </div>
+                ${{Object.entries(forwardersByChannel).map(([channelId, channelData]) => `
+                    <div class="card" style="margin-bottom: 25px;">
+                        <div style="border-bottom: 2px solid #3498db; padding-bottom: 10px; margin-bottom: 15px;">
+                            <h3>${{getChatIcon(channelData.chat_type)}} ${{escapeHtml(channelData.chat_title)}}</h3>
+                            <p style="margin: 5px 0; color: #6c757d;">
+                                <strong>ID Canale:</strong> <code>${{channelId}}</code>
+                                ${{channelData.chat_username ? `<strong>Username:</strong> @${{channelData.chat_username}}` : ''}}
+                            </p>
+                            <p style="margin: 5px 0; color: #28a745; font-weight: bold;">
+                                📊 ${{channelData.forwarders.length}} reindirizzamenti attivi
+                            </p>
                         </div>
                         
-                        <div id="channelAction_${channel.id}" style="margin-top: 15px; display: none;"></div>
-                    </div>
-                `).join('')}
-            `;
-        }
-        
-        async function executeChannelAction(channelId, action) {
-            const actionContainer = document.getElementById(`channelAction_${channelId}`);
-            actionContainer.style.display = 'block';
-            actionContainer.innerHTML = `
-                <div class="loading" style="text-align: center; padding: 10px;">
-                    <div class="spinner" style="display: inline-block;"></div>
-                    <span style="margin-left: 10px;">Esecuzione ${action}...</span>
-                </div>
-            `;
-            
-            try {
-                const result = await makeRequest('/api/telegram/channel-action', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        channel_id: channelId,
-                        action: action
-                    })
-                });
-                
-                if (result.success) {
-                    renderActionResult(actionContainer, result);
-                } else {
-                    actionContainer.innerHTML = `
-                        <div class="status error">
-                            <p>❌ Errore: ${result.error}</p>
-                        </div>
-                    `;
-                }
-            } catch (error) {
-                actionContainer.innerHTML = `
-                    <div class="status error">
-                        <p>❌ Errore di connessione</p>
-                    </div>
-                `;
-            }
-        }
-        
-        function renderActionResult(container, result) {
-            const { action } = result;
-            
-            if (action === 'info') {
-                const channel = result.channel;
-                container.innerHTML = `
-                    <div class="status success">
-                        <h4>ℹ️ Informazioni Canale</h4>
-                        <p><strong>Nome:</strong> ${channel.title}</p>
-                        <p><strong>Username:</strong> ${channel.username ? '@' + channel.username : 'N/A'}</p>
-                        <p><strong>Membri:</strong> ${channel.participants_count || 'N/A'}</p>
-                        <p><strong>Tipo:</strong> ${channel.is_channel ? 'Canale' : 'Gruppo'}</p>
-                        ${channel.description ? `<p><strong>Descrizione:</strong> ${channel.description}</p>` : ''}
-                    </div>
-                `;
-            } else if (action === 'recent_messages') {
-                container.innerHTML = `
-                    <div class="status success">
-                        <h4>💬 Messaggi Recenti (${result.total_shown})</h4>
-                        ${result.messages.map(msg => `
-                            <div style="border-left: 3px solid #007bff; padding-left: 10px; margin: 10px 0;">
-                                <p><strong>ID:</strong> ${msg.id} | <strong>Data:</strong> ${msg.date ? new Date(msg.date).toLocaleString('it-IT') : 'N/A'}</p>
-                                <p>${msg.text || '[Media/File]'}</p>
-                                ${msg.views ? `<small>👁️ ${msg.views} visualizzazioni</small>` : ''}
-                            </div>
-                        `).join('')}
-                    </div>
-                `;
-            } else if (action === 'members') {
-                container.innerHTML = `
-                    <div class="status success">
-                        <h4>👥 Membri (${result.total_shown} mostrati)</h4>
-                        <div style="max-height: 300px; overflow-y: auto;">
-                            ${result.members.map(member => `
-                                <div style="padding: 5px 0; border-bottom: 1px solid #eee;">
-                                    <strong>${member.first_name || ''} ${member.last_name || ''}</strong>
-                                    ${member.username ? ` (@${member.username})` : ''}
-                                    ${member.is_bot ? ' <span class="badge" style="background: #ffc107; color: black;">BOT</span>' : ''}
+                        ${{channelData.forwarders.map(fwd => `
+                            <div style="border: 1px solid #e9ecef; border-radius: 8px; padding: 15px; margin-bottom: 15px; background: #f8f9fa;">
+                                <div style="display: flex; justify-content: space-between; align-items: start;">
+                                    <div style="flex: 1;">
+                                        <h4>${{getTargetIcon(fwd.target_type)}} Inoltro verso: ${{escapeHtml(fwd.target_name || fwd.target_id)}}</h4>
+                                        
+                                        <div style="margin: 10px 0;">
+                                            <p style="margin-bottom: 5px;"><strong>Container Docker:</strong></p>
+                                            <code style="display: block; padding: 8px; background: #e9ecef; border-radius: 4px; font-size: 12px; word-break: break-all;">
+                                                ${{fwd.container_name}}
+                                            </code>
+                                        </div>
+                                        
+                                        <p><strong>Tipo destinatario:</strong> ${{getTargetTypeLabel(fwd.target_type)}}</p>
+                                        <p><strong>Stato:</strong> 
+                                            <span class="badge" style="background: ${{fwd.is_running ? '#28a745' : '#dc3545'}}; color: white;">
+                                                ${{fwd.is_running ? '🟢 ATTIVO' : '🔴 FERMO'}}
+                                            </span>
+                                        </p>
+                                        <p><strong>Numero messaggi inoltrati:</strong> 
+                                            <span style="font-weight: bold;">${{fwd.message_count || 0}} messaggi</span>
+                                        </p>
+                                        ${{fwd.last_message_at ? `<p><strong>Ultimo messaggio inoltrato:</strong> ${{new Date(fwd.last_message_at).toLocaleString('it-IT')}}</p>` : ''}}
+                                        <p><strong>Data Creazione Inoltro:</strong> ${{new Date(fwd.created_at).toLocaleString('it-IT')}}</p>
+                                        
+                                        <div style="margin-top: 15px; padding: 10px; background: #f0f8ff; border-radius: 5px;">
+                                            <h5 style="margin: 0 0 10px 0;">📊 Risorse Container</h5>
+                                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                                <div>
+                                                    <strong>RAM:</strong> ${{fwd.memory_usage_mb || 0}}MB / ${{fwd.memory_limit_mb || 256}}MB
+                                                    <div style="background: #e0e0e0; height: 10px; border-radius: 5px; margin-top: 5px;">
+                                                        <div style="background: ${{getResourceColor(fwd.memory_percent)}}; height: 100%; border-radius: 5px; width: ${{Math.min(fwd.memory_percent || 0, 100)}}%;"></div>
+                                                    </div>
+                                                    <small>${{(fwd.memory_percent || 0).toFixed(1)}}%</small>
+                                                </div>
+                                                <div>
+                                                    <strong>CPU:</strong> ${{(fwd.cpu_percent || 0).toFixed(1)}}%
+                                                    <div style="background: #e0e0e0; height: 10px; border-radius: 5px; margin-top: 5px;">
+                                                        <div style="background: ${{getResourceColor(fwd.cpu_percent)}}; height: 100%; border-radius: 5px; width: ${{Math.min(fwd.cpu_percent || 0, 100)}}%;"></div>
+                                                    </div>
+                                                    <small>Max: 50% (0.5 core)</small>
+                                                </div>
+                                            </div>
+                                            ${{fwd.restart_count > 0 ? `<p style="margin-top: 10px; color: #ff6b6b;"><strong>⚠️ Riavvii:</strong> ${{fwd.restart_count}}</p>` : ''}}
+                                        </div>
+                                    </div>
+                                    
+                                    <div style="display: flex; gap: 10px;">
+                                        <button onclick="restartForwarder(${{fwd.id}})" class="btn btn-warning" title="Riavvia">
+                                            🔄 Riavvia
+                                        </button>
+                                        <button onclick="deleteForwarder(${{fwd.id}})" class="btn btn-danger" title="Elimina">
+                                            🗑️ Elimina
+                                        </button>
+                                    </div>
                                 </div>
-                            `).join('')}
-                        </div>
+                            </div>
+                        `).join('')}}
                     </div>
-                `;
-            }
-        }
+                `).join('')}}
+            `;
+        }}
         
-        function getChannelIcon(channelName) {
-            switch(channelName) {
-                case 'primary': return '🎯';
-                case 'secondary': return '🔄';
-                case 'backup': return '💾';
-                default: return '⚙️';
-            }
-        }
+        async function restartForwarder(forwarderId) {{
+            if (!confirm('Sei sicuro di voler riavviare questo reindirizzamento?')) {{
+                return;
+            }}
+            
+            try {{
+                const result = await makeRequest(`/api/forwarders/${{forwarderId}}/restart`, {{
+                    method: 'POST'
+                }});
+                
+                if (result.success) {{
+                    showMessage('Reindirizzamento riavviato con successo!', 'success');
+                    // Ricarica la lista
+                    loadAllForwarders();
+                }} else {{
+                    showMessage(result.error || 'Errore durante il riavvio', 'error');
+                }}
+            }} catch (error) {{
+                showMessage('Errore di connessione', 'error');
+            }}
+        }}
         
-        function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
-                showMessage(`Copiato: ${text}`, 'success');
-            }).catch(() => {
-                // Fallback per browser più vecchi
-                const textarea = document.createElement('textarea');
-                textarea.value = text;
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textarea);
-                showMessage(`Copiato: ${text}`, 'success');
-            });
-        }
+        async function deleteForwarder(forwarderId) {{
+            if (!confirm('Sei sicuro di voler eliminare questo reindirizzamento? Questa azione non può essere annullata.')) {{
+                return;
+            }}
+            
+            try {{
+                const result = await makeRequest(`/api/forwarders/${{forwarderId}}`, {{
+                    method: 'DELETE'
+                }});
+                
+                if (result.success) {{
+                    showMessage('Reindirizzamento eliminato con successo!', 'success');
+                    // Ricarica la lista
+                    loadAllForwarders();
+                }} else {{
+                    showMessage(result.error || 'Errore durante l\'eliminazione', 'error');
+                }}
+            }} catch (error) {{
+                showMessage('Errore di connessione', 'error');
+            }}
+        }}
         
-        async function logout() {
-            if (confirm('Sei sicuro di voler uscire?')) {
-                try {
-                    const result = await makeRequest('/api/auth/logout', {
-                        method: 'POST'
-                    });
-                    
-                    // Rimuovi il token dalla sessione locale
-                    localStorage.removeItem('session_token');
-                    
-                    // Reindirizza al login
-                    if (result && result.redirect) {
-                        window.location.href = result.redirect;
-                    } else {
-                        window.location.href = '/login';
-                    }
-                } catch (error) {
-                    // Anche in caso di errore, facciamo logout lato client
-                    localStorage.removeItem('session_token');
-                    window.location.href = '/login';
-                }
-            }
-        }
+        function getChatIcon(type) {{
+            switch(type) {{
+                case 'private': return '👤';
+                case 'group': return '👥';
+                case 'supergroup': return '👥';
+                case 'channel': return '📢';
+                default: return '💬';
+            }}
+        }}
+        
+        function getTargetIcon(type) {{
+            switch(type) {{
+                case 'user': return '👤';
+                case 'group': return '👥';
+                case 'channel': return '📢';
+                default: return '📍';
+            }}
+        }}
+        
+        function getTargetTypeLabel(type) {{
+            switch(type) {{
+                case 'user': return 'Persona/Bot';
+                case 'group': return 'Gruppo';
+                case 'channel': return 'Canale';
+                default: return type;
+            }}
+        }}
+        
+        function getResourceColor(percent) {{
+            if (percent < 50) return '#4CAF50';  // Verde
+            if (percent < 75) return '#FFC107';  // Giallo
+            if (percent < 90) return '#FF9800';  // Arancione
+            return '#F44336';  // Rosso
+        }}
+        
+        function escapeHtml(text) {{
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }}
+        
+        function showError(message) {{
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('errorContainer').style.display = 'block';
+            document.getElementById('forwardersContainer').style.display = 'none';
+        }}
     </script>
     """
     
     return render_template_string(
         BASE_TEMPLATE,
-        title="Canali Configurati",
-        subtitle="Gestione canali configurati nel sistema",
+        title="Tutti i Reindirizzamenti",
+        subtitle="Gestione reindirizzamenti per canale",
         content=Markup(content)
     )
 
@@ -1684,14 +1638,12 @@ BACKUP_CHANNEL_ID=-1003456789012</pre>
 def forwarders_page(source_chat_id):
     """Pagina gestione inoltri per una specifica chat"""
     
+    # Use unified menu
+    menu_html = get_unified_menu('forwarders')
+    
     # Recupera info sulla chat dalla sessione o chiamata API
     content = f"""
-    <div class="nav">
-        <a href="/dashboard">🏠 Dashboard</a>
-        <a href="/profile">👤 Profilo</a>
-        <a href="/chats">💬 Le mie Chat</a>
-        <a href="#" onclick="logout()">🚪 Logout</a>
-    </div>
+    {menu_html}
     
     <h2>🔄 Gestione Inoltri</h2>
     <p><a href="/chats">← Torna alla lista chat</a></p>
@@ -1876,24 +1828,41 @@ def forwarders_page(source_chat_id):
                         <div style="display: flex; justify-content: space-between; align-items: start;">
                             <div style="flex: 1;">
                                 <h4>${{getTargetIcon(fwd.target_type)}} Inoltro verso: ${{escapeHtml(fwd.target_name || fwd.target_id)}}</h4>
+                                
                                 <div style="margin: 10px 0;">
                                     <p style="margin-bottom: 5px;"><strong>Container Docker:</strong></p>
-                                    <code style="display: block; padding: 8px; background: #f8f9fa; border-radius: 4px; font-size: 12px; word-break: break-all;">
+                                    <code style="display: block; padding: 8px; background: #e9ecef; border-radius: 4px; font-size: 12px; word-break: break-all;">
                                         ${{fwd.container_name}}
                                     </code>
                                 </div>
-                                <p><strong>Stato:</strong> 
-                                    <span class="badge" style="background: ${{fwd.is_running ? '#28a745' : '#dc3545'}}; color: white;">
-                                        ${{fwd.is_running ? '🟢 ATTIVO' : '🔴 FERMO'}}
-                                    </span>
+                                
+                                <p><strong>Tipo destinatario:</strong> ${{getTargetTypeLabel(fwd.target_type)}}</p>
+                                <p><strong>Numero messaggi inoltrati:</strong> 
+                                    <span id="msgCount_${{fwd.id}}" style="font-weight: bold;">${{fwd.message_count || 0}} messaggi</span>
                                 </p>
-                                <p><strong>Messaggi inoltrati:</strong> 
-                                    <span id="msgCount_${{fwd.id}}" style="font-weight: bold;">
-                                        ${{fwd.message_count || 0}}
-                                    </span>
-                                </p>
-                                <p><strong>Creato:</strong> ${{new Date(fwd.created_at).toLocaleString('it-IT')}}</p>
-                                ${{fwd.last_message_at ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(fwd.last_message_at).toLocaleString('it-IT')}}</p>` : ''}}
+                                ${{fwd.last_message_at ? `<p><strong>Ultimo messaggio inoltrato:</strong> ${{new Date(fwd.last_message_at).toLocaleString('it-IT')}}</p>` : ''}}
+                                <p><strong>Data Creazione Inoltro:</strong> ${{new Date(fwd.created_at).toLocaleString('it-IT')}}</p>
+                                
+                                <div style="margin-top: 15px; padding: 10px; background: #f0f8ff; border-radius: 5px;">
+                                    <h5 style="margin: 0 0 10px 0;">📊 Risorse Container</h5>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                                        <div>
+                                            <strong>RAM:</strong> ${{fwd.memory_usage_mb || 0}}MB / ${{fwd.memory_limit_mb || 256}}MB
+                                            <div style="background: #e0e0e0; height: 10px; border-radius: 5px; margin-top: 5px;">
+                                                <div style="background: ${{getResourceColor(fwd.memory_percent)}}; height: 100%; border-radius: 5px; width: ${{Math.min(fwd.memory_percent || 0, 100)}}%;"></div>
+                                            </div>
+                                            <small>${{(fwd.memory_percent || 0).toFixed(1)}}%</small>
+                                        </div>
+                                        <div>
+                                            <strong>CPU:</strong> ${{(fwd.cpu_percent || 0).toFixed(1)}}%
+                                            <div style="background: #e0e0e0; height: 10px; border-radius: 5px; margin-top: 5px;">
+                                                <div style="background: ${{getResourceColor(fwd.cpu_percent)}}; height: 100%; border-radius: 5px; width: ${{Math.min(fwd.cpu_percent || 0, 100)}}%;"></div>
+                                            </div>
+                                            <small>Max: 50% (0.5 core)</small>
+                                        </div>
+                                    </div>
+                                    ${{fwd.restart_count > 0 ? `<p style="margin-top: 10px; color: #ff6b6b;"><strong>⚠️ Riavvii:</strong> ${{fwd.restart_count}}</p>` : ''}}
+                                </div>
                             </div>
                             <div style="display: flex; gap: 10px;">
                                 <button onclick="restartForwarder(${{fwd.id}})" class="btn btn-warning" title="Riavvia">
@@ -2228,6 +2197,22 @@ def forwarders_page(source_chat_id):
             }}
         }}
         
+        function getTargetTypeLabel(type) {{
+            switch(type) {{
+                case 'user': return 'Persona/Bot';
+                case 'group': return 'Gruppo';
+                case 'channel': return 'Canale';
+                default: return type;
+            }}
+        }}
+        
+        function getResourceColor(percent) {{
+            if (percent < 50) return '#4CAF50';  // Verde
+            if (percent < 75) return '#FFC107';  // Giallo
+            if (percent < 90) return '#FF9800';  // Arancione
+            return '#F44336';  // Rosso
+        }}
+        
         function escapeHtml(text) {{
             const div = document.createElement('div');
             div.textContent = text;
@@ -2264,7 +2249,7 @@ def forwarders_page(source_chat_id):
     return render_template_string(
         BASE_TEMPLATE,
         title="Gestione Inoltri",
-        subtitle=f"Inoltri per chat {source_chat_id}",
+        subtitle=f"Chat ID: {source_chat_id}",
         content=Markup(content)
     )
 
@@ -2304,11 +2289,30 @@ def api_verify_code():
 
 @app.route('/api/auth/logout', methods=['POST'])
 def api_logout():
-    """Logout e pulizia sessione"""
-    # Pulisci sessione Flask
-    session.clear()
-    
-    return jsonify({'success': True, 'message': 'Logout completato', 'redirect': '/login'})
+    """Proxy per logout con pulizia sessione"""
+    try:
+        # Chiama il backend per logout
+        result = call_backend('/api/auth/logout', 'POST', request.get_json())
+        
+        # Pulisci la sessione Flask
+        session.clear()
+        
+        logger.info("🔐 [LOGOUT] Sessione pulita con successo")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Logout completato con successo',
+            'redirect': '/login'
+        })
+    except Exception as e:
+        logger.error(f"🔐 [LOGOUT] Errore durante logout: {e}")
+        # Pulisci comunque la sessione anche in caso di errore
+        session.clear()
+        return jsonify({
+            'success': True,
+            'message': 'Logout completato',
+            'redirect': '/login'
+        })
 
 @app.route('/api/telegram/get-chats', methods=['GET'])
 def api_get_chats():
@@ -2414,20 +2418,24 @@ def api_cleanup_orphaned_forwarders():
     result = call_backend('/api/forwarders/cleanup-orphaned', 'POST', auth_token=session['session_token'])
     return jsonify(result or {'error': 'Backend non disponibile'})
 
-@app.route('/api/auth/check-cached-code', methods=['GET'])
-def api_check_cached_code():
-    """Proxy per controllare codice in cache"""
-    return call_backend('/api/auth/check-cached-code', 'GET')
+@app.route('/api/auth/check-future-tokens', methods=['GET'])
+def api_check_future_tokens():
+    """Proxy per controllare future auth tokens"""
+    return call_backend('/api/auth/check-future-tokens', 'GET')
 
-@app.route('/api/auth/use-cached-code', methods=['POST'])
-def api_use_cached_code():
-    """Proxy per usare codice in cache"""
-    return call_backend('/api/auth/use-cached-code', 'POST', request.get_json())
+@app.route('/api/auth/clear-future-tokens', methods=['POST'])
+def api_clear_future_tokens():
+    """Proxy per cancellare future auth tokens"""
+    return call_backend('/api/auth/clear-future-tokens', 'POST', request.get_json())
 
-@app.route('/api/auth/clear-cached-code', methods=['POST'])
-def api_clear_cached_code():
-    """Proxy per cancellare codice in cache"""
-    return call_backend('/api/auth/clear-cached-code', 'POST', request.get_json())
+@app.route('/api/forwarders/all', methods=['GET'])
+def api_get_all_forwarders():
+    """Proxy per recupero di tutti i reindirizzamenti raggruppati per canale"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    result = call_backend('/api/forwarders/all', 'GET', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
 
 # ============================================
 # 🏥 HEALTH & UTILS
@@ -2472,6 +2480,223 @@ def not_found(error):
         subtitle="Errore 404",
         content=Markup(content)
     ), 404
+
+# ========================================================================================
+# LEGACY PROXIES (DEPRECATED)
+# ========================================================================================
+
+@app.route('/api/auth/check-cached-code', methods=['GET'])
+def api_check_cached_code():
+    """Proxy deprecato per controllare codice in cache"""
+    return call_backend('/api/auth/check-cached-code', 'GET')
+
+@app.route('/api/auth/use-cached-code', methods=['POST'])
+def api_use_cached_code():
+    """Proxy deprecato per usare codice in cache"""
+    return call_backend('/api/auth/use-cached-code', 'POST', request.get_json())
+
+@app.route('/api/auth/clear-cached-code', methods=['POST'])
+def api_clear_cached_code():
+    """Proxy deprecato per cancellare codice in cache"""
+    return call_backend('/api/auth/clear-cached-code', 'POST', request.get_json())
+
+@app.route('/api/auth/rotate-credentials', methods=['POST'])
+def api_rotate_credentials():
+    """Proxy per rotazione credenziali"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    data = request.get_json()
+    result = call_backend('/api/auth/rotate-credentials', 'POST', data, auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/auth/check-credentials-status', methods=['GET'])
+def api_check_credentials_status():
+    """Proxy per controllo stato credenziali"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    result = call_backend('/api/auth/check-credentials-status', 'GET', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+# ========================================================================================
+# EXISTING API PROXIES
+# ========================================================================================
+
+@app.route('/security')
+@require_auth
+def security_page():
+    """Pagina sicurezza e gestione credenziali"""
+    
+    # Use unified menu
+    menu_html = get_unified_menu('security')
+    
+    content = f"""
+    {menu_html}
+    
+    <h2>🔐 Sicurezza Account</h2>
+    
+    <div class="card">
+        <h3>📊 Stato Sicurezza</h3>
+        <div id="securityStatus" class="loading">
+            <div class="spinner"></div>
+            <p>Controllo stato sicurezza...</p>
+        </div>
+    </div>
+    
+    <div class="card" style="margin-top: 20px;">
+        <h3>🔄 Rotazione Credenziali</h3>
+        <div class="status warning">
+            <p><strong>⚠️ Attenzione:</strong> La rotazione delle credenziali fermerà tutti i reindirizzamenti attivi.</p>
+            <p>Dovrai ricreare tutti i forwarder dopo aver aggiornato le credenziali.</p>
+        </div>
+        
+        <form id="rotateCredentialsForm" onsubmit="rotateCredentials(event)" style="margin-top: 20px;">
+            <div class="form-group">
+                <label for="newApiId">Nuovo API ID</label>
+                <input type="text" id="newApiId" name="newApiId" required 
+                       placeholder="Es: 12345678" pattern="[0-9]+" 
+                       title="Solo numeri">
+            </div>
+            
+            <div class="form-group">
+                <label for="newApiHash">Nuovo API Hash</label>
+                <input type="text" id="newApiHash" name="newApiHash" required 
+                       placeholder="Es: a1b2c3d4e5f6..." pattern="[a-f0-9]{{32}}"
+                       title="32 caratteri esadecimali">
+            </div>
+            
+            <button type="submit" class="btn btn-danger">
+                🔄 Ruota Credenziali
+            </button>
+        </form>
+    </div>
+    
+    <div class="card" style="margin-top: 20px;">
+        <h3>📚 Best Practices di Sicurezza</h3>
+        <ul>
+            <li>Ruota le credenziali API ogni 3 mesi</li>
+            <li>Non condividere mai le tue credenziali API</li>
+            <li>Usa password complesse per il tuo account</li>
+            <li>Monitora regolarmente i container per attività sospette</li>
+            <li>Rimuovi i forwarder non più utilizzati</li>
+        </ul>
+    </div>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', checkSecurityStatus);
+        
+        async function checkSecurityStatus() {{
+            try {{
+                const result = await makeRequest('/api/auth/check-credentials-status', {{
+                    method: 'GET'
+                }});
+                
+                if (result.success) {{
+                    renderSecurityStatus(result);
+                }} else {{
+                    showError('Errore nel controllo sicurezza');
+                }}
+            }} catch (error) {{
+                showError('Errore di connessione');
+            }}
+        }}
+        
+        function renderSecurityStatus(data) {{
+            const container = document.getElementById('securityStatus');
+            
+            let statusIcon = '✅';
+            let statusColor = '#28a745';
+            let statusText = 'Sicuro';
+            
+            if (data.status === 'warning') {{
+                statusIcon = '⚠️';
+                statusColor = '#ffc107';
+                statusText = 'Attenzione';
+            }} else if (data.status === 'danger') {{
+                statusIcon = '❌';
+                statusColor = '#dc3545';
+                statusText = 'A rischio';
+            }}
+            
+            container.innerHTML = `
+                <div style="text-align: center; padding: 20px;">
+                    <div style="font-size: 48px;">${{statusIcon}}</div>
+                    <h4 style="color: ${{statusColor}};">${{statusText}}</h4>
+                    <p>Credenziali aggiornate ${{data.days_since_update}} giorni fa</p>
+                </div>
+                
+                ${{data.recommendations.length > 0 ? `
+                    <div style="margin-top: 20px;">
+                        <h5>Raccomandazioni:</h5>
+                        <ul>
+                            ${{data.recommendations.map(rec => `
+                                <li>
+                                    <strong>${{rec.message}}</strong><br>
+                                    <small>${{rec.action}}</small>
+                                </li>
+                            `).join('')}}
+                        </ul>
+                    </div>
+                ` : ''}}
+            `;
+        }}
+        
+        async function rotateCredentials(event) {{
+            event.preventDefault();
+            
+            if (!confirm('Sei sicuro di voler ruotare le credenziali? Tutti i forwarder verranno fermati.')) {{
+                return;
+            }}
+            
+            const newApiId = document.getElementById('newApiId').value;
+            const newApiHash = document.getElementById('newApiHash').value;
+            
+            showMessage('Rotazione credenziali in corso...', 'info');
+            
+            try {{
+                const result = await makeRequest('/api/auth/rotate-credentials', {{
+                    method: 'POST',
+                    body: JSON.stringify({{
+                        new_api_id: newApiId,
+                        new_api_hash: newApiHash
+                    }})
+                }});
+                
+                if (result.success) {{
+                    showMessage(`✅ ${{result.message}}<br>
+                        <strong>Container fermati:</strong> ${{result.stopped_containers}}<br>
+                        <strong>Azione richiesta:</strong> ${{result.action_required}}`, 'success');
+                    
+                    // Refresh security status
+                    setTimeout(checkSecurityStatus, 2000);
+                    
+                    // Clear form
+                    document.getElementById('rotateCredentialsForm').reset();
+                }} else {{
+                    showMessage(`❌ Errore: ${{result.error}}`, 'error');
+                }}
+            }} catch (error) {{
+                showMessage('❌ Errore di connessione', 'error');
+            }}
+        }}
+        
+        function showError(message) {{
+            document.getElementById('securityStatus').innerHTML = `
+                <div class="status error">
+                    <p>${{message}}</p>
+                </div>
+            `;
+        }}
+    </script>
+    """
+    
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Sicurezza",
+        subtitle="Gestione sicurezza e credenziali",
+        content=Markup(content)
+    )
 
 if __name__ == '__main__':
     logger.info("🌐 Starting Telegram Chat Manager Frontend")

@@ -81,6 +81,7 @@ services:
       - ./backend:/app/backend
       - ./database:/app/database
       - /var/run/docker.sock:/var/run/docker.sock
+      - ./telethon_sessions:/app/telethon_sessions
     depends_on:
       solanagram-db:
         condition: service_healthy

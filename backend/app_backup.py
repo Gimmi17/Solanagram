@@ -77,7 +77,7 @@ def get_error_message(key: str, **kwargs) -> str:
 # Environment-based configuration
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', secrets.token_hex(32))
-    DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://chatmanager:chatmanager_password@postgres:5432/chatmanager')
+    DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://solanagram_user:solanagram_password@solanagram-db:5432/solanagram_db')
     REDIS_HOST = os.environ.get('REDIS_HOST', 'redis')
     REDIS_PORT = int(os.environ.get('REDIS_PORT', 6379))
     REDIS_DB = int(os.environ.get('REDIS_DB', 0))
@@ -247,8 +247,8 @@ async def cleanup_phone_completely(phone: str):
 async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string_session: bool = False) -> Optional[TelegramClient]:
     """
     Creates a new Telethon client for a given phone number.
-    Always creates a fresh client to avoid asyncio loop issues.
-    Properly cleans up old clients to prevent connection conflicts.
+    Uses file-based sessions by default to avoid SQLite database locking issues.
+    Enhanced with keep-alive and connection management.
     """
     try:
         # Always clean up any existing client for this phone to avoid loop conflicts
@@ -272,13 +272,22 @@ async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string
             
             # Try to load existing session string if we have a file session
             if os.path.exists(session_file):
-                # Create a temporary client to extract the session string
-                temp_client = TelegramClient(session_file, api_id, api_hash)
-                await temp_client.connect()
-                if temp_client.is_connected():
-                    session_string = temp_client.session.save()
-                    await temp_client.disconnect()
-                    logger.info(f"Extracted session string from file for {phone}, length: {len(session_string)}")
+                try:
+                    # Create a temporary client to extract the session string
+                    temp_client = TelegramClient(session_file, api_id, api_hash)
+                    await temp_client.connect()
+                    if temp_client.is_connected():
+                        session_string = temp_client.session.save()
+                        await temp_client.disconnect()
+                        logger.info(f"Extracted session string from file for {phone}, length: {len(session_string)}")
+                except Exception as e:
+                    logger.warning(f"Could not extract session string from file for {phone}: {e}")
+                    # Remove corrupted session file
+                    try:
+                        os.remove(session_file)
+                        logger.info(f"Removed corrupted session file for {phone}")
+                    except:
+                        pass
             
             # Create client with StringSession
             from telethon.sessions import StringSession
@@ -287,6 +296,9 @@ async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string
             # Normal file-based session
             session_file = os.path.join(SESSION_DIR, f"user_{hash_phone_number(phone)}.session")
             client = TelegramClient(session_file, api_id, api_hash)
+        
+        # Setup flood wait handling
+        setup_flood_wait_handling(client, phone)
         
         # Connect with timeout to avoid hanging
         await asyncio.wait_for(client.connect(), timeout=30.0)
@@ -299,6 +311,11 @@ async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string
         
         # Store the new client
         active_clients[phone] = client
+        
+        # Start keep-alive heartbeat in background (only if authorized)
+        if await client.is_user_authorized():
+            asyncio.create_task(keep_alive_heartbeat(client, phone))
+        
         logger.info(f"New client for {phone} created and connected.")
         return client
         
@@ -316,13 +333,128 @@ async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string
         return None
 
 # ========================================================================================
+# INTELLIGENT FLOOD WAIT HANDLING
+# ========================================================================================
+
+async def handle_flood_wait(client, phone: str, operation: str = "unknown") -> dict:
+    """Intelligently handle FloodWaitError with automatic client pausing"""
+    try:
+        # Get the flood wait threshold from client settings
+        flood_threshold = getattr(client, 'flood_sleep_threshold', 60)
+        
+        # If threshold is 0, don't auto-sleep (let caller handle it)
+        if flood_threshold == 0:
+            return {
+                "success": False,
+                "status": "flood_wait",
+                "error": "FloodWaitError detected - manual handling required"
+            }
+        
+        # Get the actual wait time from the last error
+        # This would be set by the exception handler
+        wait_time = getattr(client, '_last_flood_wait_seconds', 30)
+        
+        logger.warning(f"FloodWaitError for {phone} during {operation}. Auto-pausing for {wait_time} seconds.")
+        
+        # Update our internal counter to sync with Telegram's wait time
+        sync_flood_wait_from_telegram(phone, wait_time)
+        
+        # Auto-sleep if within threshold
+        if wait_time <= flood_threshold:
+            logger.info(f"Auto-sleeping for {wait_time} seconds due to FloodWaitError")
+            await asyncio.sleep(wait_time)
+            
+            return {
+                "success": True,
+                "status": "flood_wait_resolved",
+                "message": f"Auto-paused for {wait_time} seconds, ready to retry",
+                "wait_time": wait_time
+            }
+        else:
+            # Wait time exceeds threshold, return error for manual handling
+            return {
+                "success": False,
+                "status": "flood_wait_exceeded",
+                "error": f"FloodWaitError requires {wait_time} seconds wait (exceeds {flood_threshold}s threshold)",
+                "wait_time": wait_time,
+                "threshold": flood_threshold
+            }
+            
+    except Exception as e:
+        logger.error(f"Error in flood wait handler: {e}")
+        return {
+            "success": False,
+            "status": "error",
+            "error": f"Flood wait handler error: {str(e)}"
+        }
+
+def setup_flood_wait_handling(client, phone: str):
+    """Setup intelligent flood wait handling for a client"""
+    # Set reasonable auto-sleep threshold (60 seconds)
+    client.flood_sleep_threshold = 60
+    
+    # Store phone for logging
+    client._phone = phone
+    
+    logger.info(f"Flood wait handling configured for {phone} with {client.flood_sleep_threshold}s threshold")
+
+# ========================================================================================
+# FUTURE AUTH TOKENS SYSTEM (Telegram Official API)
+# ========================================================================================
+
+def get_future_auth_tokens(phone: str) -> list:
+    """Get stored future auth tokens for a phone number"""
+    redis_conn = get_redis_connection()
+    if not redis_conn:
+        return []
+    
+    tokens_key = f"future_auth_tokens:{phone}"
+    tokens_data = redis_conn.get(tokens_key)
+    
+    if tokens_data:
+        try:
+            return json.loads(tokens_data)
+        except (json.JSONDecodeError, KeyError):
+            redis_conn.delete(tokens_key)
+    
+    return []
+
+def save_future_auth_token(phone: str, token: str) -> None:
+    """Save a future auth token for a phone number"""
+    redis_conn = get_redis_connection()
+    if not redis_conn:
+        return
+    
+    tokens_key = f"future_auth_tokens:{phone}"
+    current_tokens = get_future_auth_tokens(phone)
+    
+    # Add new token
+    current_tokens.append(token)
+    
+    # Keep only the last 20 tokens (Telegram limit)
+    if len(current_tokens) > 20:
+        current_tokens = current_tokens[-20:]
+    
+    # Store tokens with 24-hour expiry
+    redis_conn.setex(tokens_key, 86400, json.dumps(current_tokens))
+    logger.info(f"Saved future auth token for {phone}")
+
+def clear_future_auth_tokens(phone: str) -> None:
+    """Clear future auth tokens for a phone number"""
+    redis_conn = get_redis_connection()
+    if redis_conn:
+        tokens_key = f"future_auth_tokens:{phone}"
+        redis_conn.delete(tokens_key)
+        logger.info(f"Cleared future auth tokens for {phone}")
+
+# ========================================================================================
 # ASYNC TELETHON HELPERS
 # ========================================================================================
 
 async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, password: str) -> dict:
     """
     Initializes a client, sends a verification code, and stores necessary data in Redis.
-    Enhanced with detailed error messages and better error handling.
+    Enhanced with intelligent FloodWaitError handling and future_auth_tokens support.
     """
     redis_conn = get_redis_connection()
     if not redis_conn:
@@ -333,6 +465,9 @@ async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, passw
         if not client:
             return {"success": False, "status": "error", "error": get_error_message('TELEGRAM_CLIENT_FAILED')}
 
+        # Setup intelligent flood wait handling
+        setup_flood_wait_handling(client, phone)
+
         # Ensure client is connected before sending code request
         if not client.is_connected():
             logger.warning(f"Client for {phone} not connected, attempting to reconnect...")
@@ -340,7 +475,97 @@ async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, passw
             if not client.is_connected():
                 return {"success": False, "status": "error", "error": "Cannot establish connection to Telegram servers"}
 
-        result = await client.send_code_request(phone, force_sms=True)
+        # Get stored future auth tokens for this phone
+        future_auth_tokens = get_future_auth_tokens(phone)
+        logger.info(f"Found {len(future_auth_tokens)} future auth tokens for {phone}")
+
+        # Send code request with future auth tokens
+        try:
+            result = await client.send_code_request(
+                phone, 
+                force_sms=True,
+                # Pass future auth tokens in codeSettings
+                code_settings={
+                    'logout_tokens': future_auth_tokens
+                }
+            )
+            
+            # Check if we got a direct success (token was valid)
+            if hasattr(result, 'authorization') and result.authorization:
+                logger.info(f"Future auth token was valid for {phone}, direct login successful")
+                
+                # Get counter status without incrementing (since we used token)
+                counter_status = get_sms_code_counter(phone)
+                
+                return {
+                    "success": True, 
+                    "status": "success", 
+                    "message": f"Login completato direttamente con token salvato per {phone}",
+                    "rate_limit": counter_status,
+                    "direct_login": True
+                }
+            
+            # If we get here, we need to send a new code
+            logger.info(f"Future auth tokens not valid, sending new code to {phone}")
+            
+        except errors.FloodWaitError as e:
+            logger.warning(f"FloodWaitError during code request for {phone}: {e.seconds} seconds")
+            
+            # Store the wait time for the handler
+            client._last_flood_wait_seconds = e.seconds
+            
+            # Handle the flood wait intelligently
+            flood_result = await handle_flood_wait(client, phone, "send_code_request")
+            
+            if flood_result["status"] == "flood_wait_resolved":
+                # Retry the code request after auto-pause
+                logger.info(f"Retrying code request for {phone} after flood wait resolution")
+                try:
+                    result = await client.send_code_request(
+                        phone, 
+                        force_sms=True,
+                        code_settings={
+                            'logout_tokens': future_auth_tokens
+                        }
+                    )
+                except errors.FloodWaitError as retry_e:
+                    # If we get another flood wait, return the error
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "error": f"FloodWaitError after retry: {retry_e.seconds} seconds"
+                    }
+            else:
+                # Return the flood wait error for manual handling
+                return {
+                    "success": False,
+                    "status": "error",
+                    "error": flood_result["error"]
+                }
+            
+        except Exception as e:
+            logger.error(f"Error sending code request with future auth tokens: {e}")
+            # Fallback to regular code request
+            try:
+                result = await client.send_code_request(phone, force_sms=True)
+            except errors.FloodWaitError as fallback_e:
+                logger.warning(f"FloodWaitError during fallback code request for {phone}: {fallback_e.seconds} seconds")
+                client._last_flood_wait_seconds = fallback_e.seconds
+                
+                flood_result = await handle_flood_wait(client, phone, "fallback_send_code")
+                
+                if flood_result["status"] == "flood_wait_resolved":
+                    # Retry the fallback request
+                    result = await client.send_code_request(phone, force_sms=True)
+                else:
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "error": flood_result["error"]
+                    }
+        
+        # Increment counter after successful request
+        counter_status = increment_sms_code_counter(phone)
         
         verification_key = f"verification:{phone}"
         verification_data = {
@@ -352,7 +577,20 @@ async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, passw
         redis_conn.set(verification_key, json.dumps(verification_data), ex=600)  # 10-minute expiry
 
         logger.info(f"Successfully sent code to {phone} and stored verification data in Redis.")
-        return {"success": True, "status": "success", "message": "Codice di verifica inviato tramite Telegram."}
+        
+        # Prepare response with counter info
+        response = {
+            "success": True, 
+            "status": "success", 
+            "message": f"Codice di verifica inviato a {phone}",
+            "rate_limit": counter_status
+        }
+        
+        # Add warning if approaching limit
+        if counter_status["count"] >= SMS_CODE_WARNING_THRESHOLD:
+            response["warning"] = f"Attenzione: hai fatto {counter_status['count']} richieste su {counter_status['limit']}. Limite raggiunto tra {counter_status['remaining']} richieste."
+        
+        return response
 
     except errors.AuthRestartError:
         logger.warning(f"AuthRestartError for {phone}. Cleaning up and retrying with fresh session.")
@@ -366,6 +604,9 @@ async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, passw
             if not client:
                 return {"success": False, "status": "error", "error": get_error_message('TELEGRAM_CLIENT_FAILED')}
 
+            # Setup flood wait handling for retry
+            setup_flood_wait_handling(client, phone)
+
             # Ensure client is connected before retry
             if not client.is_connected():
                 logger.warning(f"Retry client for {phone} not connected, attempting to reconnect...")
@@ -373,7 +614,40 @@ async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, passw
                 if not client.is_connected():
                     return {"success": False, "status": "error", "error": "Cannot establish connection to Telegram servers during retry"}
 
-            result = await client.send_code_request(phone, force_sms=True)
+            # Retry with future auth tokens
+            future_auth_tokens = get_future_auth_tokens(phone)
+            
+            try:
+                result = await client.send_code_request(
+                    phone, 
+                    force_sms=True,
+                    code_settings={
+                        'logout_tokens': future_auth_tokens
+                    }
+                )
+            except errors.FloodWaitError as retry_e:
+                logger.warning(f"FloodWaitError during retry for {phone}: {retry_e.seconds} seconds")
+                client._last_flood_wait_seconds = retry_e.seconds
+                
+                flood_result = await handle_flood_wait(client, phone, "retry_send_code")
+                
+                if flood_result["status"] == "flood_wait_resolved":
+                    result = await client.send_code_request(
+                        phone, 
+                        force_sms=True,
+                        code_settings={
+                            'logout_tokens': future_auth_tokens
+                        }
+                    )
+                else:
+                    return {
+                        "success": False,
+                        "status": "error",
+                        "error": flood_result["error"]
+                    }
+            
+            # Increment counter after successful retry
+            counter_status = increment_sms_code_counter(phone)
             
             verification_key = f"verification:{phone}"
             verification_data = {
@@ -385,40 +659,27 @@ async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, passw
             redis_conn.set(verification_key, json.dumps(verification_data), ex=600)
 
             logger.info(f"Successfully sent code to {phone} after AuthRestart recovery.")
-            return {"success": True, "status": "success", "message": "Codice di verifica inviato tramite Telegram."}
+            
+            response = {
+                "success": True, 
+                "status": "success", 
+                "message": f"Codice di verifica inviato a {phone}",
+                "rate_limit": counter_status
+            }
+            
+            if counter_status["count"] >= SMS_CODE_WARNING_THRESHOLD:
+                response["warning"] = f"Attenzione: hai fatto {counter_status['count']} richieste su {counter_status['limit']}. Limite raggiunto tra {counter_status['remaining']} richieste."
+            
+            return response
             
         except Exception as retry_error:
             logger.error(f"Failed to retry after AuthRestartError for {phone}: {retry_error}")
             return {"success": False, "status": "error", "error": get_error_message('AUTH_RESTART_REQUIRED')}
-    
-    except errors.PhoneNumberInvalidError:
-        logger.error(f"Invalid phone number provided: {phone}")
-        return {"success": False, "status": "error", "error": get_error_message('PHONE_INVALID')}
-
-    except errors.ApiIdInvalidError:
-        logger.error(f"Invalid API ID provided for {phone}")
-        return {"success": False, "status": "error", "error": get_error_message('API_CREDENTIALS_INVALID')}
-
-    except errors.FloodWaitError as e:
-        logger.error(f"Flood wait error for {phone}: {e.seconds} seconds")
-        return {"success": False, "status": "error", "error": f"{get_error_message('FLOOD_WAIT')} (Attendi {e.seconds} secondi)"}
-
-    except Exception as e:
-        error_msg = str(e)
-        # Check for asyncio loop issues
-        if "asyncio event loop" in error_msg.lower() or "different event loop" in error_msg.lower():
-            logger.warning(f"Asyncio loop issue for {phone}. Performing complete cleanup.")
-            await cleanup_phone_completely(phone)
-            return {"success": False, "status": "error", "error": get_error_message('ASYNCIO_LOOP_ERROR')}
-        
-        logger.error(f"An unexpected error occurred while sending code to {phone}: {e}")
-        return {"success": False, "status": "error", "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}
-
 
 async def verify_telegram_code_async(phone: str, code: str) -> dict:
     """
     Asynchronously verifies the Telegram code using data from Redis.
-    Enhanced with detailed error messages.
+    Enhanced with future_auth_tokens support as per Telegram API documentation.
     """
     redis_conn = get_redis_connection()
     verification_key = f"verification:{phone}"
@@ -433,21 +694,33 @@ async def verify_telegram_code_async(phone: str, code: str) -> dict:
     phone_code_hash = verification_data["phone_code_hash"]
     password = verification_data.get("password")
 
+    # Use file-based sessions like the working system
     client = await get_telethon_client(phone, api_id, api_hash)
     if not client:
         return {"success": False, "status": "error", "error": get_error_message('TELEGRAM_CLIENT_FAILED')}
         
     try:
-        await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
+        result = await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
         logger.info(f"Successfully signed in user {phone}.")
+        
+        # Check if we got a future_auth_token in the response
+        if hasattr(result, 'future_auth_token') and result.future_auth_token:
+            save_future_auth_token(phone, result.future_auth_token)
+            logger.info(f"Saved future auth token for {phone}")
         
     except errors.SessionPasswordNeededError:
         logger.info(f"2FA password needed for {phone}. Trying to supply stored password.")
         if not password:
             return {"success": False, "status": "error", "error": get_error_message('PASSWORD_2FA_REQUIRED')}
         try:
-            await client.sign_in(password=password)
+            result = await client.sign_in(password=password)
             logger.info(f"Successfully signed in user {phone} with 2FA password.")
+            
+            # Check if we got a future_auth_token in the response
+            if hasattr(result, 'future_auth_token') and result.future_auth_token:
+                save_future_auth_token(phone, result.future_auth_token)
+                logger.info(f"Saved future auth token for {phone} (with 2FA)")
+                
         except errors.PasswordHashInvalidError:
             logger.error(f"Invalid 2FA password for user {phone}.")
             return {"success": False, "status": "error", "error": get_error_message('PASSWORD_2FA_INVALID')}
@@ -490,6 +763,7 @@ async def verify_telegram_code_async(phone: str, code: str) -> dict:
 async def get_user_chats_async(phone: str) -> dict:
     """
     Asynchronously fetches user's dialogs/chats from Telegram.
+    Uses file-based sessions for better compatibility with chat loading.
     """
     db = get_db_connection()
     with db.cursor(cursor_factory=RealDictCursor) as cursor:
@@ -502,6 +776,7 @@ async def get_user_chats_async(phone: str) -> dict:
     api_id = user_creds['api_id']
     api_hash = decrypt_api_hash(user_creds['api_hash_encrypted'])
 
+    # Use file-based sessions for chat loading (like the working system)
     client = await get_telethon_client(phone, api_id, api_hash)
     if not client or not await client.is_user_authorized():
         logger.error(f"User {phone} is not authorized. Please log in again.")
@@ -533,6 +808,7 @@ async def get_user_chats_async(phone: str) -> dict:
         
         logger.info(f"Found {len(chats)} chats for user {phone}")
         return {"success": True, "chats": chats}
+        
     except Exception as e:
         logger.error(f"Failed to fetch chats for {phone}: {e}")
         return {"success": False, "error": "Failed to fetch chats. Please try logging in again."}
@@ -618,6 +894,7 @@ async def execute_channel_action_async(phone: str, channel_id: str, action: str)
     api_id = user_creds['api_id']
     api_hash = decrypt_api_hash(user_creds['api_hash_encrypted'])
 
+    # Use file-based sessions for channel actions (like the working system)
     client = await get_telethon_client(phone, api_id, api_hash)
     if not client or not await client.is_user_authorized():
         return {"success": False, "error": "Autorizzazione Telegram persa"}
@@ -684,6 +961,128 @@ async def execute_channel_action_async(phone: str, channel_id: str, action: str)
     except Exception as e:
         logger.error(f"Error executing channel action {action} on {channel_id}: {e}")
         return {"success": False, "error": f"Errore durante l'esecuzione: {str(e)}"}
+
+# ============================================
+# 📱 RATE LIMITING SYSTEM
+# ============================================
+
+# Constants for rate limiting
+SMS_CODE_LIMIT = 30  # Maximum SMS code requests before FLOOD_WAIT (more realistic)
+SMS_CODE_RESET_HOURS = 24  # Hours to reset the counter
+SMS_CODE_WARNING_THRESHOLD = 20  # Show warning when approaching limit
+
+def get_sms_code_counter(phone: str) -> dict:
+    """Get SMS code request counter for a phone number"""
+    redis_conn = get_redis_connection()
+    if not redis_conn:
+        return {"count": 0, "reset_time": None, "remaining": SMS_CODE_LIMIT}
+    
+    counter_key = f"sms_counter:{phone}"
+    reset_key = f"sms_reset:{phone}"
+    
+    # Get current count
+    count = int(redis_conn.get(counter_key) or 0)
+    
+    # Get reset time
+    reset_time = redis_conn.get(reset_key)
+    if reset_time:
+        reset_time = int(reset_time)
+        # Check if reset time has passed
+        if time.time() > reset_time:
+            # Reset counter
+            redis_conn.delete(counter_key)
+            redis_conn.delete(reset_key)
+            count = 0
+            reset_time = None
+    
+    remaining = max(0, SMS_CODE_LIMIT - count)
+    
+    return {
+        "count": count,
+        "reset_time": reset_time,
+        "remaining": remaining,
+        "limit": SMS_CODE_LIMIT
+    }
+
+def increment_sms_code_counter(phone: str) -> dict:
+    """Increment SMS code request counter and return current status"""
+    redis_conn = get_redis_connection()
+    if not redis_conn:
+        return {"count": 1, "reset_time": None, "remaining": SMS_CODE_LIMIT - 1}
+    
+    counter_key = f"sms_counter:{phone}"
+    reset_key = f"sms_reset:{phone}"
+    
+    # Get current status
+    current = get_sms_code_counter(phone)
+    
+    # Increment counter
+    new_count = current["count"] + 1
+    redis_conn.set(counter_key, new_count)
+    
+    # Set reset time if not already set
+    if not current["reset_time"]:
+        reset_time = int(time.time() + (SMS_CODE_RESET_HOURS * 3600))
+        redis_conn.set(reset_key, reset_time)
+        current["reset_time"] = reset_time
+    
+    current["count"] = new_count
+    current["remaining"] = max(0, SMS_CODE_LIMIT - new_count)
+    
+    return current
+
+def can_request_sms_code(phone: str) -> dict:
+    """Check if SMS code can be requested for this phone"""
+    counter = get_sms_code_counter(phone)
+    
+    if counter["count"] >= SMS_CODE_LIMIT:
+        # Calculate time remaining
+        if counter["reset_time"]:
+            time_remaining = counter["reset_time"] - int(time.time())
+            if time_remaining > 0:
+                hours = time_remaining // 3600
+                minutes = (time_remaining % 3600) // 60
+                return {
+                    "can_request": False,
+                    "reason": "limit_exceeded",
+                    "time_remaining": time_remaining,
+                    "time_formatted": f"{hours}h {minutes}m",
+                    "counter": counter
+                }
+    
+    return {
+        "can_request": True,
+        "counter": counter
+    }
+
+def sync_flood_wait_from_telegram(phone: str, flood_wait_seconds: int) -> dict:
+    """Sync our counter with Telegram's FLOOD_WAIT response"""
+    redis_conn = get_redis_connection()
+    if not redis_conn:
+        return {"count": 0, "reset_time": None, "remaining": SMS_CODE_LIMIT}
+    
+    counter_key = f"sms_counter:{phone}"
+    reset_key = f"sms_reset:{phone}"
+    
+    # Calculate when the FLOOD_WAIT will expire
+    reset_time = int(time.time() + flood_wait_seconds)
+    
+    # Set counter to limit and reset time
+    redis_conn.set(counter_key, SMS_CODE_LIMIT)
+    redis_conn.set(reset_key, reset_time)
+    
+    # Calculate time remaining
+    hours = flood_wait_seconds // 3600
+    minutes = (flood_wait_seconds % 3600) // 60
+    
+    return {
+        "count": SMS_CODE_LIMIT,
+        "reset_time": reset_time,
+        "remaining": 0,
+        "limit": SMS_CODE_LIMIT,
+        "telegram_flood_wait": True,
+        "time_formatted": f"{hours}h {minutes}m"
+    }
 
 # ============================================
 #  API Endpoints
@@ -1003,8 +1402,8 @@ def get_forwarders(source_chat_id):
         with db.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute("""
                 SELECT id, source_chat_id, source_chat_title, target_type, 
-                       target_id, target_name, container_name, status, 
-                       message_count, created_at, last_message_at
+                       target_id, target_name, container_name, container_status, 
+                       messages_forwarded, created_at, last_forwarded_at
                 FROM forwarders 
                 WHERE user_id = %s AND source_chat_id = %s
                 ORDER BY created_at DESC
@@ -1017,7 +1416,7 @@ def get_forwarders(source_chat_id):
             if forwarder['container_name']:
                 container_status = forwarder_manager.get_container_status(forwarder['container_name'])
                 forwarder['container_status'] = container_status['status']
-                forwarder['message_count'] = container_status.get('message_count', forwarder['message_count'])
+                forwarder['message_count'] = container_status.get('message_count', forwarder['messages_forwarded'])
                 forwarder['is_running'] = container_status.get('running', False)
             else:
                 forwarder['container_status'] = 'not_created'
@@ -1026,8 +1425,10 @@ def get_forwarders(source_chat_id):
             # Convert datetime to ISO format
             if forwarder.get('created_at'):
                 forwarder['created_at'] = forwarder['created_at'].isoformat()
-            if forwarder.get('last_message_at'):
-                forwarder['last_message_at'] = forwarder['last_message_at'].isoformat()
+            if forwarder.get('last_forwarded_at'):
+                forwarder['last_message_at'] = forwarder['last_forwarded_at'].isoformat()
+            else:
+                forwarder['last_message_at'] = None
         
         return jsonify({
             "success": True,
@@ -1209,81 +1610,129 @@ def prepare_forwarder():
 
         code_from_client: Optional[str] = data.get('code')
 
-        # SEMPRE chiediamo il codice per un nuovo forwarder
-        verification_key = f"forwarder_verification:{current_user_id}:{source_chat_id}"
-        redis_conn = get_redis_connection()
-
-        # 1) L'utente NON ha inviato alcun codice -> inviamo codice e salviamo phone_code_hash
-        if not code_from_client:
+        # Controlliamo se esiste già una sessione forwarder valida
+        session_exists_and_valid = False
+        if os.path.exists(session_file):
             try:
-                async def _send_code():
-                    # Se esiste già un file sessione, rimuoviamolo per iniziare da zero
-                    if os.path.exists(session_file):
-                        os.remove(session_file)
-                        logger.info(f"Removed existing session file for {session_name}")
-                    
+                async def _check_session():
                     client = TelegramClient(session_file, api_id, api_hash)
                     await client.connect()
-                    result = await client.send_code_request(phone)
-
-                    if redis_conn:
-                        verification_data = {
-                            "phone_code_hash": result.phone_code_hash,
-                            "session_name": session_name,
-                            "api_id": api_id,
-                            "api_hash": api_hash
-                        }
-                        redis_conn.set(verification_key, json.dumps(verification_data), ex=600)
-                    await client.disconnect()
-
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(_send_code())
-                loop.close()
-
-                return jsonify({
-                    "success": True,
-                    "code_sent": True,
-                    "message": f"Codice di verifica inviato a {phone}",
-                    "phone": phone
-                }), 202  # 202 Accepted -> client deve inviare 'code'
-            except Exception as e:
-                logger.error(f"Error sending code for forwarder session: {e}")
-                return jsonify({"success": False, "error": str(e)}), 500
-
-        # 2) Abbiamo ricevuto un codice -> verifichiamo
-        else:
-            if not redis_conn or not redis_conn.exists(verification_key):
-                return jsonify({"success": False, "error": "Richiesta di verifica scaduta o assente"}), 400
-
-            try:
-                verification_data = json.loads(redis_conn.get(verification_key))
-
-                async def _verify_code():
-                    client = TelegramClient(session_file, verification_data['api_id'], verification_data['api_hash'])
-                    await client.connect()
-                    await client.sign_in(phone, code_from_client, phone_code_hash=verification_data['phone_code_hash'])
                     authorized = await client.is_user_authorized()
                     await client.disconnect()
                     return authorized
 
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                ok = loop.run_until_complete(_verify_code())
+                session_exists_and_valid = loop.run_until_complete(_check_session())
                 loop.close()
-
-                if not ok:
-                    return jsonify({"success": False, "error": "Codice non valido"}), 400
-
-                # Puliamo la chiave redis e proseguiamo con la creazione del container
-                redis_conn.delete(verification_key)
-                logger.info(f"Forwarder session created for {session_name}")
+                logger.info(f"Session {session_name} exists and is valid: {session_exists_and_valid}")
             except Exception as e:
-                logger.error(f"Error verifying code for forwarder session: {e}")
-                return jsonify({"success": False, "error": str(e)}), 500
+                logger.warning(f"Session {session_name} exists but is invalid: {e}")
+                # Rimuoviamo il file di sessione corrotto
+                os.remove(session_file)
+                session_exists_and_valid = False
 
-        # For now, we'll use empty session string as we're using file session
-        session_string = ""
+        # Se la sessione è valida, non serve richiedere il codice
+        if session_exists_and_valid:
+            logger.info(f"Using existing valid session for {session_name}")
+            # For now, we'll use empty session string as we're using file session
+            session_string = ""
+        else:
+            # SEMPRE chiediamo il codice per un nuovo forwarder
+            verification_key = f"forwarder_verification:{current_user_id}:{source_chat_id}"
+            redis_conn = get_redis_connection()
+
+            # 1) L'utente NON ha inviato alcun codice -> inviamo codice e salviamo phone_code_hash
+            if not code_from_client:
+                # Check rate limiting first
+                rate_check = can_request_sms_code(phone)
+                if not rate_check["can_request"]:
+                    return jsonify({
+                        "success": False, 
+                        "error": f"Limite SMS raggiunto. Riprova tra {rate_check['time_formatted']}",
+                        "rate_limit": rate_check
+                    }), 429
+                
+                try:
+                    async def _send_code():
+                        # Se esiste già un file sessione, rimuoviamolo per iniziare da zero
+                        if os.path.exists(session_file):
+                            os.remove(session_file)
+                            logger.info(f"Removed existing session file for {session_name}")
+                        
+                        client = TelegramClient(session_file, api_id, api_hash)
+                        await client.connect()
+                        result = await client.send_code_request(phone)
+
+                        if redis_conn:
+                            verification_data = {
+                                "phone_code_hash": result.phone_code_hash,
+                                "session_name": session_name,
+                                "api_id": api_id,
+                                "api_hash": api_hash
+                            }
+                            redis_conn.set(verification_key, json.dumps(verification_data), ex=600)
+                        await client.disconnect()
+
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(_send_code())
+                    loop.close()
+
+                    # Increment counter after successful request
+                    counter_status = increment_sms_code_counter(phone)
+                    
+                    # Prepare response with counter info
+                    response = {
+                        "success": True,
+                        "code_sent": True,
+                        "message": f"Codice di verifica inviato a {phone}",
+                        "phone": phone,
+                        "rate_limit": counter_status
+                    }
+                    
+                    # Add warning if approaching limit
+                    if counter_status["count"] >= SMS_CODE_WARNING_THRESHOLD:
+                        response["warning"] = f"Attenzione: hai fatto {counter_status['count']} richieste su {counter_status['limit']}. Limite raggiunto tra {counter_status['remaining']} richieste."
+
+                    return jsonify(response), 202  # 202 Accepted -> client deve inviare 'code'
+                except Exception as e:
+                    logger.error(f"Error sending code for forwarder session: {e}")
+                    return jsonify({"success": False, "error": str(e)}), 500
+
+            # 2) Abbiamo ricevuto un codice -> verifichiamo
+            else:
+                if not redis_conn or not redis_conn.exists(verification_key):
+                    return jsonify({"success": False, "error": "Richiesta di verifica scaduta o assente"}), 400
+
+                try:
+                    verification_data = json.loads(redis_conn.get(verification_key))
+
+                    async def _verify_code():
+                        client = TelegramClient(session_file, verification_data['api_id'], verification_data['api_hash'])
+                        await client.connect()
+                        await client.sign_in(phone, code_from_client, phone_code_hash=verification_data['phone_code_hash'])
+                        authorized = await client.is_user_authorized()
+                        await client.disconnect()
+                        return authorized
+
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    ok = loop.run_until_complete(_verify_code())
+                    loop.close()
+
+                    if not ok:
+                        return jsonify({"success": False, "error": "Codice non valido"}), 400
+
+                    # Puliamo la chiave redis e proseguiamo con la creazione del container
+                    redis_conn.delete(verification_key)
+                    logger.info(f"Forwarder session created for {session_name}")
+                except Exception as e:
+                    logger.error(f"Error verifying code for forwarder session: {e}")
+                    return jsonify({"success": False, "error": str(e)}), 500
+
+            # For now, we'll use empty session string as we're using file session
+            session_string = ""
         
         # Resolve target name if not provided
         target_name = data.get('target_name', '')
@@ -1349,7 +1798,7 @@ def prepare_forwarder():
                 INSERT INTO forwarders (
                     user_id, source_chat_id, source_chat_title, 
                     target_type, target_id, target_name, 
-                    container_name, status
+                    container_name, container_status
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
@@ -1478,81 +1927,129 @@ def create_forwarder():
 
         code_from_client: Optional[str] = data.get('code')
 
-        # SEMPRE chiediamo il codice per un nuovo forwarder
-        verification_key = f"forwarder_verification:{current_user_id}:{source_chat_id}"
-        redis_conn = get_redis_connection()
-
-        # 1) L'utente NON ha inviato alcun codice -> inviamo codice e salviamo phone_code_hash
-        if not code_from_client:
+        # Controlliamo se esiste già una sessione forwarder valida
+        session_exists_and_valid = False
+        if os.path.exists(session_file):
             try:
-                async def _send_code():
-                    # Se esiste già un file sessione, rimuoviamolo per iniziare da zero
-                    if os.path.exists(session_file):
-                        os.remove(session_file)
-                        logger.info(f"Removed existing session file for {session_name}")
-                    
+                async def _check_session():
                     client = TelegramClient(session_file, api_id, api_hash)
                     await client.connect()
-                    result = await client.send_code_request(phone)
-
-                    if redis_conn:
-                        verification_data = {
-                            "phone_code_hash": result.phone_code_hash,
-                            "session_name": session_name,
-                            "api_id": api_id,
-                            "api_hash": api_hash
-                        }
-                        redis_conn.set(verification_key, json.dumps(verification_data), ex=600)
-                    await client.disconnect()
-
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(_send_code())
-                loop.close()
-
-                return jsonify({
-                    "success": True,
-                    "code_sent": True,
-                    "message": f"Codice di verifica inviato a {phone}",
-                    "phone": phone
-                }), 202  # 202 Accepted -> client deve inviare 'code'
-            except Exception as e:
-                logger.error(f"Error sending code for forwarder session: {e}")
-                return jsonify({"success": False, "error": str(e)}), 500
-
-        # 2) Abbiamo ricevuto un codice -> verifichiamo
-        else:
-            if not redis_conn or not redis_conn.exists(verification_key):
-                return jsonify({"success": False, "error": "Richiesta di verifica scaduta o assente"}), 400
-
-            try:
-                verification_data = json.loads(redis_conn.get(verification_key))
-
-                async def _verify_code():
-                    client = TelegramClient(session_file, verification_data['api_id'], verification_data['api_hash'])
-                    await client.connect()
-                    await client.sign_in(phone, code_from_client, phone_code_hash=verification_data['phone_code_hash'])
                     authorized = await client.is_user_authorized()
                     await client.disconnect()
                     return authorized
 
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                ok = loop.run_until_complete(_verify_code())
+                session_exists_and_valid = loop.run_until_complete(_check_session())
                 loop.close()
-
-                if not ok:
-                    return jsonify({"success": False, "error": "Codice non valido"}), 400
-
-                # Puliamo la chiave redis e proseguiamo con la creazione del container
-                redis_conn.delete(verification_key)
-                logger.info(f"Forwarder session created for {session_name}")
+                logger.info(f"Session {session_name} exists and is valid: {session_exists_and_valid}")
             except Exception as e:
-                logger.error(f"Error verifying code for forwarder session: {e}")
-                return jsonify({"success": False, "error": str(e)}), 500
+                logger.warning(f"Session {session_name} exists but is invalid: {e}")
+                # Rimuoviamo il file di sessione corrotto
+                os.remove(session_file)
+                session_exists_and_valid = False
 
-        # For now, we'll use empty session string as we're using file session
-        session_string = ""
+        # Se la sessione è valida, non serve richiedere il codice
+        if session_exists_and_valid:
+            logger.info(f"Using existing valid session for {session_name}")
+            # For now, we'll use empty session string as we're using file session
+            session_string = ""
+        else:
+            # SEMPRE chiediamo il codice per un nuovo forwarder
+            verification_key = f"forwarder_verification:{current_user_id}:{source_chat_id}"
+            redis_conn = get_redis_connection()
+
+            # 1) L'utente NON ha inviato alcun codice -> inviamo codice e salviamo phone_code_hash
+            if not code_from_client:
+                # Check rate limiting first
+                rate_check = can_request_sms_code(phone)
+                if not rate_check["can_request"]:
+                    return jsonify({
+                        "success": False, 
+                        "error": f"Limite SMS raggiunto. Riprova tra {rate_check['time_formatted']}",
+                        "rate_limit": rate_check
+                    }), 429
+                
+                try:
+                    async def _send_code():
+                        # Se esiste già un file sessione, rimuoviamolo per iniziare da zero
+                        if os.path.exists(session_file):
+                            os.remove(session_file)
+                            logger.info(f"Removed existing session file for {session_name}")
+                        
+                        client = TelegramClient(session_file, api_id, api_hash)
+                        await client.connect()
+                        result = await client.send_code_request(phone)
+
+                        if redis_conn:
+                            verification_data = {
+                                "phone_code_hash": result.phone_code_hash,
+                                "session_name": session_name,
+                                "api_id": api_id,
+                                "api_hash": api_hash
+                            }
+                            redis_conn.set(verification_key, json.dumps(verification_data), ex=600)
+                        await client.disconnect()
+
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(_send_code())
+                    loop.close()
+
+                    # Increment counter after successful request
+                    counter_status = increment_sms_code_counter(phone)
+                    
+                    # Prepare response with counter info
+                    response = {
+                        "success": True,
+                        "code_sent": True,
+                        "message": f"Codice di verifica inviato a {phone}",
+                        "phone": phone,
+                        "rate_limit": counter_status
+                    }
+                    
+                    # Add warning if approaching limit
+                    if counter_status["count"] >= SMS_CODE_WARNING_THRESHOLD:
+                        response["warning"] = f"Attenzione: hai fatto {counter_status['count']} richieste su {counter_status['limit']}. Limite raggiunto tra {counter_status['remaining']} richieste."
+
+                    return jsonify(response), 202  # 202 Accepted -> client deve inviare 'code'
+                except Exception as e:
+                    logger.error(f"Error sending code for forwarder session: {e}")
+                    return jsonify({"success": False, "error": str(e)}), 500
+
+            # 2) Abbiamo ricevuto un codice -> verifichiamo
+            else:
+                if not redis_conn or not redis_conn.exists(verification_key):
+                    return jsonify({"success": False, "error": "Richiesta di verifica scaduta o assente"}), 400
+
+                try:
+                    verification_data = json.loads(redis_conn.get(verification_key))
+
+                    async def _verify_code():
+                        client = TelegramClient(session_file, verification_data['api_id'], verification_data['api_hash'])
+                        await client.connect()
+                        await client.sign_in(phone, code_from_client, phone_code_hash=verification_data['phone_code_hash'])
+                        authorized = await client.is_user_authorized()
+                        await client.disconnect()
+                        return authorized
+
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    ok = loop.run_until_complete(_verify_code())
+                    loop.close()
+
+                    if not ok:
+                        return jsonify({"success": False, "error": "Codice non valido"}), 400
+
+                    # Puliamo la chiave redis e proseguiamo con la creazione del container
+                    redis_conn.delete(verification_key)
+                    logger.info(f"Forwarder session created for {session_name}")
+                except Exception as e:
+                    logger.error(f"Error verifying code for forwarder session: {e}")
+                    return jsonify({"success": False, "error": str(e)}), 500
+
+            # For now, we'll use empty session string as we're using file session
+            session_string = ""
         
         # Resolve target name if not provided
         target_name = data.get('target_name', '')
@@ -1618,7 +2115,7 @@ def create_forwarder():
                 INSERT INTO forwarders (
                     user_id, source_chat_id, source_chat_title, 
                     target_type, target_id, target_name, 
-                    container_name, status
+                    container_name, container_status
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """, (
@@ -1733,7 +2230,7 @@ def restart_forwarder(forwarder_id):
             with db.cursor() as cursor:
                 cursor.execute("""
                     UPDATE forwarders 
-                    SET status = 'running' 
+                    SET container_status = 'running' 
                     WHERE id = %s
                 """, (forwarder_id,))
                 db.commit()
@@ -1814,6 +2311,513 @@ def create_app():
         get_redis_connection()
     return app
 
+@app.route('/api/auth/sms-status', methods=['GET'])
+@jwt_required()
+def get_sms_status():
+    """Get SMS code request status for current user"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SELECT phone FROM users WHERE id = %s", (current_user_id,))
+            user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({"success": False, "error": "Utente non trovato"}), 404
+        
+        phone = user['phone']
+        rate_check = can_request_sms_code(phone)
+        
+        return jsonify({
+            "success": True,
+            "phone": phone,
+            "rate_limit": rate_check
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting SMS status: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/auth/reset-sms-counter', methods=['POST'])
+@jwt_required()
+def reset_sms_counter():
+    """Force reset SMS code counter for current user (for testing)"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SELECT phone FROM users WHERE id = %s", (current_user_id,))
+            user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({"success": False, "error": "Utente non trovato"}), 404
+        
+        phone = user['phone']
+        redis_conn = get_redis_connection()
+        
+        if redis_conn:
+            # Reset counter
+            counter_key = f"sms_counter:{phone}"
+            reset_key = f"sms_reset:{phone}"
+            redis_conn.delete(counter_key)
+            redis_conn.delete(reset_key)
+            
+            logger.info(f"Reset SMS counter for {phone}")
+        
+        return jsonify({
+            "success": True,
+            "message": "Contatore SMS resettato",
+            "phone": phone
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error resetting SMS counter: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/auth/logout', methods=['POST'])
+@jwt_required()
+def logout():
+    """Logout user and save future_auth_token if provided"""
+    current_user_id = get_jwt_identity()
+    data = request.get_json() or {}
+    
+    db = get_db_connection()
+    if not db:
+        return jsonify({"success": False, "error": "Errore di connessione database"}), 500
+    
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SELECT phone FROM users WHERE id = %s", (current_user_id,))
+            user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({"success": False, "error": "Utente non trovato"}), 404
+        
+        phone = user['phone']
+        
+        # If a future_auth_token is provided, save it
+        future_auth_token = data.get('future_auth_token')
+        if future_auth_token:
+            save_future_auth_token(phone, future_auth_token)
+            logger.info(f"Saved future auth token during logout for {phone}")
+        
+        return jsonify({
+            "success": True,
+            "message": "Logout completato con successo"
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error during logout: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# ========================================================================================
+# FUTURE AUTH TOKENS MANAGEMENT ENDPOINTS
+# ========================================================================================
+
+@app.route('/api/auth/check-future-tokens', methods=['GET'])
+def check_future_tokens():
+    """Check if there are future auth tokens available for a phone number"""
+    phone = request.args.get('phone')
+    
+    if not phone:
+        return jsonify({"success": False, "error": "Numero di telefono richiesto"}), 400
+    
+    future_tokens = get_future_auth_tokens(phone)
+    
+    if future_tokens:
+        return jsonify({
+            "success": True,
+            "has_future_tokens": True,
+            "token_count": len(future_tokens),
+            "message": f"Trovati {len(future_tokens)} token di autenticazione salvati"
+        })
+    
+    return jsonify({
+        "success": True,
+        "has_future_tokens": False,
+        "token_count": 0,
+        "message": "Nessun token di autenticazione salvato"
+    })
+
+@app.route('/api/auth/clear-future-tokens', methods=['POST'])
+def clear_future_tokens():
+    """Clear future auth tokens for a phone number"""
+    data = request.get_json()
+    phone = data.get('phone')
+    
+    if not phone:
+        return jsonify({"success": False, "error": "Numero di telefono richiesto"}), 400
+    
+    clear_future_auth_tokens(phone)
+    
+    return jsonify({
+        "success": True,
+        "message": f"Token di autenticazione cancellati per {phone}"
+    })
+
+# ========================================================================================
+# KEEP-ALIVE & AUTO-RECONNECTION SYSTEM
+# ========================================================================================
+
+async def keep_alive_heartbeat(client: TelegramClient, phone: str):
+    """Send periodic heartbeats to keep Telegram connection alive"""
+    while True:
+        try:
+            if client.is_connected():
+                # Send a lightweight request to keep connection alive
+                await client.get_me()
+                logger.debug(f"Keep-alive heartbeat sent for {phone}")
+            else:
+                logger.warning(f"Client for {phone} not connected during heartbeat")
+        except Exception as e:
+            logger.error(f"Keep-alive heartbeat failed for {phone}: {e}")
+        
+        # Wait 5 minutes before next heartbeat
+        await asyncio.sleep(300)
+
+async def ensure_client_connection(client: TelegramClient, phone: str, max_retries: int = 3) -> bool:
+    """Ensure client is connected and authenticated, with auto-reconnection"""
+    for attempt in range(max_retries):
+        try:
+            if not client.is_connected():
+                logger.info(f"Client for {phone} not connected, attempting to connect (attempt {attempt + 1})")
+                await client.connect()
+            
+            if not await client.is_user_authorized():
+                logger.warning(f"Client for {phone} not authorized, session may be expired")
+                return False
+            
+            # Test connection with a lightweight request
+            await client.get_me()
+            logger.info(f"Client for {phone} connection verified successfully")
+            return True
+            
+        except errors.SessionPasswordNeededError:
+            logger.warning(f"2FA required for {phone}, cannot auto-reconnect")
+            return False
+        except errors.AuthKeyUnregisteredError:
+            logger.warning(f"Auth key unregistered for {phone}, session expired")
+            return False
+        except errors.AuthRestartError:
+            logger.warning(f"Auth restart required for {phone}")
+            return False
+        except Exception as e:
+            logger.error(f"Connection attempt {attempt + 1} failed for {phone}: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)  # Exponential backoff
+            else:
+                logger.error(f"All connection attempts failed for {phone}")
+                return False
+    
+    return False
+
+async def get_user_chats_with_retry(phone: str, max_retries: int = 3) -> dict:
+    """Get user chats with automatic retry and connection management"""
+    
+    # Get API credentials from database
+    db = get_db_connection()
+    with db.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute("SELECT api_id, api_hash_encrypted FROM users WHERE phone = %s", (phone,))
+        user_creds = cursor.fetchone()
+
+    if not user_creds or not user_creds['api_id'] or not user_creds['api_hash_encrypted']:
+        return {
+            "success": False,
+            "status": "no_credentials",
+            "error": "Credenziali API non trovate per questo utente."
+        }
+
+    api_id = user_creds['api_id']
+    api_hash = decrypt_api_hash(user_creds['api_hash_encrypted'])
+    
+    for attempt in range(max_retries):
+        try:
+            # Get or create client
+            client = active_clients.get(phone)
+            if not client:
+                logger.info(f"Creating new client for {phone} (attempt {attempt + 1})")
+                client = await get_telethon_client(phone, api_id, api_hash)
+                if not client:
+                    return {
+                        "success": False,
+                        "status": "client_creation_failed",
+                        "error": "Impossibile creare client Telegram. Effettua nuovamente il login."
+                    }
+            
+            # Ensure connection is healthy
+            if not await ensure_client_connection(client, phone):
+                logger.error(f"Failed to ensure connection for {phone}")
+                # Clean up unhealthy client
+                await cleanup_phone_completely(phone)
+                if attempt < max_retries - 1:
+                    continue  # Try again with fresh client
+                else:
+                    return {
+                        "success": False,
+                        "status": "connection_failed",
+                        "error": "Impossibile stabilire connessione con Telegram. Riprova."
+                    }
+            
+            # Get dialogs with timeout
+            logger.info(f"Fetching chats for {phone} (attempt {attempt + 1})")
+            dialogs = await asyncio.wait_for(
+                client.get_dialogs(limit=100),
+                timeout=30.0  # 30 second timeout
+            )
+            
+            # Process dialogs
+            chats = []
+            for dialog in dialogs:
+                if dialog.entity:
+                    chat_type = "private"
+                    if dialog.is_channel:
+                        chat_type = "channel"
+                    elif dialog.is_group:
+                        chat_type = "supergroup" if hasattr(dialog.entity, 'megagroup') and dialog.entity.megagroup else "group"
+                    
+                    chat_info = {
+                        "id": str(dialog.entity.id),
+                        "title": dialog.name or "Unnamed Chat",
+                        "username": getattr(dialog.entity, 'username', ''),
+                        "type": chat_type,
+                        "members_count": getattr(dialog.entity, 'participants_count', None),
+                        "description": getattr(dialog.entity, 'about', None),
+                        "unread_count": dialog.unread_count if hasattr(dialog, 'unread_count') else 0,
+                        "last_message_date": dialog.date.isoformat() if dialog.date else None
+                    }
+                    chats.append(chat_info)
+            
+            logger.info(f"Successfully fetched {len(chats)} chats for {phone}")
+            return {
+                "success": True,
+                "status": "success",
+                "chats": chats,
+                "count": len(chats)
+            }
+            
+        except asyncio.TimeoutError:
+            logger.error(f"Timeout fetching chats for {phone} (attempt {attempt + 1})")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+            else:
+                return {
+                    "success": False,
+                    "status": "timeout",
+                    "error": "Timeout nel caricamento della lista chat. Riprova."
+                }
+                
+        except errors.SessionPasswordNeededError:
+            logger.warning(f"2FA required for {phone}")
+            return {
+                "success": False,
+                "status": "2fa_required",
+                "error": "Autenticazione 2FA richiesta. Effettua nuovamente il login."
+            }
+            
+        except errors.AuthKeyUnregisteredError:
+            logger.warning(f"Session expired for {phone}")
+            await cleanup_phone_completely(phone)
+            return {
+                "success": False,
+                "status": "session_expired",
+                "error": "Sessione Telegram scaduta. Effettua nuovamente il login."
+            }
+            
+        except errors.AuthRestartError:
+            logger.warning(f"Auth restart required for {phone}")
+            await cleanup_phone_completely(phone)
+            return {
+                "success": False,
+                "status": "auth_restart",
+                "error": "Riavvio autenticazione richiesto. Effettua nuovamente il login."
+            }
+            
+        except Exception as e:
+            logger.error(f"Error fetching chats for {phone} (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)
+            else:
+                return {
+                    "success": False,
+                    "status": "error",
+                    "error": f"Errore nel caricamento chat: {str(e)}"
+                }
+    
+    return {
+        "success": False,
+        "status": "max_retries_exceeded",
+        "error": "Numero massimo di tentativi superato. Riprova più tardi."
+    }
+
+# ========================================================================================
+# ENHANCED CLIENT MANAGEMENT
+# ========================================================================================
+
+async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string_session: bool = False) -> Optional[TelegramClient]:
+    """
+    Creates a new Telethon client for a given phone number.
+    Uses file-based sessions by default to avoid SQLite database locking issues.
+    Enhanced with keep-alive and connection management.
+    """
+    try:
+        # Always clean up any existing client for this phone to avoid loop conflicts
+        if phone in active_clients:
+            try:
+                old_client = active_clients[phone]
+                if old_client.is_connected():
+                    await old_client.disconnect()
+                logger.info(f"Cleaned up old client for {phone}")
+            except Exception as e:
+                logger.warning(f"Error cleaning up old client for {phone}: {e}")
+            finally:
+                del active_clients[phone]
+
+        logger.info(f"Creating a new Telethon client for phone {phone} (string_session={use_string_session})")
+        
+        if use_string_session:
+            # For StringSession, first check if we have a saved session
+            session_file = os.path.join(SESSION_DIR, f"user_{hash_phone_number(phone)}.session")
+            session_string = ""
+            
+            # Try to load existing session string if we have a file session
+            if os.path.exists(session_file):
+                try:
+                    # Create a temporary client to extract the session string
+                    temp_client = TelegramClient(session_file, api_id, api_hash)
+                    await temp_client.connect()
+                    if temp_client.is_connected():
+                        session_string = temp_client.session.save()
+                        await temp_client.disconnect()
+                        logger.info(f"Extracted session string from file for {phone}, length: {len(session_string)}")
+                except Exception as e:
+                    logger.warning(f"Could not extract session string from file for {phone}: {e}")
+                    # Remove corrupted session file
+                    try:
+                        os.remove(session_file)
+                        logger.info(f"Removed corrupted session file for {phone}")
+                    except:
+                        pass
+            
+            # Create client with StringSession
+            from telethon.sessions import StringSession
+            client = TelegramClient(StringSession(session_string), api_id, api_hash)
+        else:
+            # Normal file-based session
+            session_file = os.path.join(SESSION_DIR, f"user_{hash_phone_number(phone)}.session")
+            client = TelegramClient(session_file, api_id, api_hash)
+        
+        # Setup flood wait handling
+        setup_flood_wait_handling(client, phone)
+        
+        # Connect with timeout to avoid hanging
+        await asyncio.wait_for(client.connect(), timeout=30.0)
+        
+        if not client.is_connected():
+            raise Exception("Failed to establish connection to Telegram servers")
+        
+        # Small delay to ensure connection is stable
+        await asyncio.sleep(0.5)
+        
+        # Store the new client
+        active_clients[phone] = client
+        
+        # Start keep-alive heartbeat in background (only if authorized)
+        if await client.is_user_authorized():
+            asyncio.create_task(keep_alive_heartbeat(client, phone))
+        
+        logger.info(f"New client for {phone} created and connected.")
+        return client
+        
+    except asyncio.TimeoutError:
+        logger.error(f"Timeout connecting to Telegram for {phone}")
+        return None
+    except errors.ApiIdInvalidError:
+        logger.error(f"Invalid API ID for {phone}")
+        return None
+    except Exception as e:
+        logger.error(f"Fatal error connecting new Telethon client for {phone}: {e}")
+        # Cleanup on failure
+        if phone in active_clients:
+            del active_clients[phone]
+        return None
+
+# ========================================================================================
+# AUTOMATIC SESSION CLEANUP
+# ========================================================================================
+
+async def cleanup_expired_sessions():
+    """Periodically cleanup expired sessions and unhealthy clients"""
+    while True:
+        try:
+            logger.info("Starting periodic session cleanup...")
+            
+            # Check all active clients
+            phones_to_remove = []
+            for phone, client in active_clients.items():
+                try:
+                    if not client.is_connected():
+                        logger.info(f"Client for {phone} not connected, marking for cleanup")
+                        phones_to_remove.append(phone)
+                        continue
+                    
+                    # Test if client is still authorized
+                    if not await client.is_user_authorized():
+                        logger.info(f"Client for {phone} not authorized, marking for cleanup")
+                        phones_to_remove.append(phone)
+                        continue
+                        
+                except Exception as e:
+                    logger.warning(f"Error checking client for {phone}: {e}")
+                    phones_to_remove.append(phone)
+            
+            # Remove unhealthy clients
+            for phone in phones_to_remove:
+                await cleanup_phone_completely(phone)
+                logger.info(f"Cleaned up expired session for {phone}")
+            
+            # Clean up orphaned session files
+            try:
+                for filename in os.listdir(SESSION_DIR):
+                    if filename.endswith('.session'):
+                        filepath = os.path.join(SESSION_DIR, filename)
+                        # Check if file is older than 24 hours and not associated with active client
+                        if time.time() - os.path.getmtime(filepath) > 86400:  # 24 hours
+                            try:
+                                os.remove(filepath)
+                                logger.info(f"Removed orphaned session file: {filename}")
+                            except Exception as e:
+                                logger.warning(f"Could not remove orphaned session file {filename}: {e}")
+            except Exception as e:
+                logger.error(f"Error during session file cleanup: {e}")
+            
+            logger.info(f"Session cleanup completed. Removed {len(phones_to_remove)} expired sessions.")
+            
+        except Exception as e:
+            logger.error(f"Error in session cleanup: {e}")
+        
+        # Run cleanup every hour
+        await asyncio.sleep(3600)
+
+# Start cleanup task when app starts
+@app.before_first_request
+def start_background_tasks():
+    """Start background tasks for session management"""
+    try:
+        # Start session cleanup task
+        asyncio.create_task(cleanup_expired_sessions())
+        logger.info("Background session cleanup task started")
+    except Exception as e:
+        logger.error(f"Failed to start background tasks: {e}")
+
 if __name__ == '__main__':
     app = create_app()
-    app.run(host='0.0.0.0', port=5000, debug=True) 
+    app.run(host='0.0.0.0', port=5000, debug=True)
+
