@@ -4,27 +4,23 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Solanagram{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/menu.css') }}?v=202506180001">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=202506180001">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=202506180002">
+    <!-- Corporate Menu Styles -->
+    {{ menu_styles|safe }}
     {% block head %}{% endblock %}
 </head>
 <body>
-    {% include 'menu.html' %}
+    <!-- Corporate Navigation Menu -->
+    {{ menu_html|safe }}
 
     <main class="main-content">
         {% block content %}{% endblock %}
     </main>
 
-    <script>
-        // Global logout function
-        function logout() {
-            if (confirm('Sei sicuro di voler uscire?')) {
-                localStorage.removeItem('access_token');
-                localStorage.removeItem('session_token');
-                window.location.href = '/';
-            }
-        }
+    <!-- Corporate Menu Scripts -->
+    {{ menu_scripts|safe }}
 
+    <script>
         // Show message function
         function showMessage(message, type = 'info') {
             const messageDiv = document.createElement('div');
@@ -36,6 +32,13 @@
             if (mainContent) {
                 mainContent.insertBefore(messageDiv, mainContent.firstChild);
             }
+            
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                if (messageDiv.parentNode) {
+                    messageDiv.parentNode.removeChild(messageDiv);
+                }
+            }, 5000);
         }
 
         // API request helper
@@ -69,6 +72,21 @@
                 console.error('Request error:', error);
                 throw error;
             }
+        }
+
+        // Loading state helpers
+        function showLoading() {
+            const loadingElements = document.querySelectorAll('.loading');
+            loadingElements.forEach(element => {
+                element.style.display = 'block';
+            });
+        }
+
+        function hideLoading() {
+            const loadingElements = document.querySelectorAll('.loading');
+            loadingElements.forEach(element => {
+                element.style.display = 'none';
+            });
         }
     </script>
 

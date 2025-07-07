@@ -17,7 +17,7 @@ from datetime import datetime
 from functools import wraps
 
 # Import menu utilities
-from menu_utils import get_unified_menu, get_logout_script
+from menu_utils import get_unified_menu, get_logout_script, get_menu_styles, get_menu_scripts
 
 # Configurazione logging
 logging.basicConfig(
@@ -34,7 +34,7 @@ BACKEND_URL = os.getenv('BACKEND_URL', 'http://backend:5000')
 ENVIRONMENT = os.getenv('FLASK_ENV', 'development')
 DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
 
-# 🎨 Template HTML base
+# 🎨 Modern Corporate Template
 BASE_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="it">
@@ -42,173 +42,351 @@ BASE_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ title }} - Solanagram</title>
+    {{ menu_styles|safe }}
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: #f8fafc;
             min-height: 100vh;
-            padding: 20px;
+            color: #334155;
+            line-height: 1.6;
         }
-        .container { 
-            max-width: 800px; 
-            margin: 0 auto; 
-            background: white; 
-            border-radius: 12px; 
-            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-        .header { 
-            background: #2c3e50; 
-            color: white; 
-            padding: 30px; 
-            text-align: center; 
-        }
-        .header h1 { font-size: 28px; margin-bottom: 8px; }
-        .header p { opacity: 0.8; font-size: 16px; }
-        .content { padding: 40px; }
-        .status { padding: 15px; border-radius: 8px; margin: 20px 0; }
-        .status.success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .status.error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-        .status.info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
-        .status.warning { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
-        .btn { 
-            display: inline-block; 
-            padding: 12px 24px; 
-            background: #3498db; 
-            color: white; 
-            text-decoration: none; 
-            border-radius: 6px; 
-            transition: all 0.3s ease; 
-            border: none;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        .btn:hover { background: #2980b9; transform: translateY(-2px); }
-        .btn.danger { background: #e74c3c; }
-        .btn.danger:hover { background: #c0392b; }
-        .btn.success { background: #27ae60; }
-        .btn.success:hover { background: #229954; }
-        .footer { 
-            background: #34495e; 
-            color: white; 
-            padding: 20px; 
-            text-align: center; 
-            font-size: 14px; 
-        }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
-        .card { background: #f8f9fa; padding: 20px; border-radius: 8px; border: 1px solid #e9ecef; }
-        .card h3 { color: #2c3e50; margin-bottom: 10px; }
-        code { background: #f1f3f4; padding: 2px 6px; border-radius: 4px; font-family: 'Monaco', monospace; }
         
-        /* Form styles */
-        .form-group { margin-bottom: 20px; }
-        .form-group label { display: block; margin-bottom: 8px; font-weight: bold; color: #2c3e50; }
-        .form-group input, .form-group textarea { 
-            width: 100%; 
-            padding: 12px; 
-            border: 1px solid #ddd; 
-            border-radius: 6px; 
-            font-size: 16px;
-            transition: border-color 0.3s ease;
-        }
-        .form-group input:focus, .form-group textarea:focus { 
-            outline: none; 
-            border-color: #3498db; 
-            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
-        }
-        .form-group small { color: #6c757d; font-size: 14px; margin-top: 5px; display: block; }
-        .form-actions { text-align: center; margin-top: 30px; }
-        .form-actions .btn { margin: 0 10px; }
-        
-        /* Loading spinner */
-        .loading { 
-            display: none; 
-            text-align: center; 
-            margin: 20px 0; 
-        }
-        .spinner { 
-            border: 3px solid #f3f3f3; 
-            border-top: 3px solid #3498db; 
-            border-radius: 50%; 
-            width: 30px; 
-            height: 30px; 
-            animation: spin 1s linear infinite; 
+        .main-content {
+            padding: 2rem;
+            max-width: 1200px;
             margin: 0 auto;
         }
-        @keyframes spin { 
-            0% { transform: rotate(0deg); } 
-            100% { transform: rotate(360deg); } 
+        
+        .page-header {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            border-left: 4px solid #667eea;
         }
         
-        /* Unified Menu Styles - Aligned with site design */
-        .nav {
-            margin-bottom: 20px;
-            text-align: center;
-            background: #f8f9fa;
+        .page-header h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #1e293b;
+            margin-bottom: 0.5rem;
+        }
+        
+        .page-header p {
+            color: #64748b;
+            font-size: 1.1rem;
+        }
+        
+        .content-section {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            margin-bottom: 2rem;
+        }
+        
+        /* Messages/Status */
+        .message, .status {
             padding: 1rem;
             border-radius: 8px;
-            border: 1px solid #e9ecef;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin: 1rem 0;
+            border-left: 4px solid;
         }
         
-        .nav-link {
-            display: inline-block;
-            margin: 0 10px;
-            color: #3498db;
+        .message-success, .status.success {
+            background: #f0fdf4;
+            color: #166534;
+            border-left-color: #22c55e;
+        }
+        
+        .message-error, .status.error {
+            background: #fef2f2;
+            color: #dc2626;
+            border-left-color: #ef4444;
+        }
+        
+        .message-info, .status.info {
+            background: #eff6ff;
+            color: #1d4ed8;
+            border-left-color: #3b82f6;
+        }
+        
+        .message-warning, .status.warning {
+            background: #fefce8;
+            color: #a16207;
+            border-left-color: #eab308;
+        }
+        
+        /* Buttons */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            background: #667eea;
+            color: white;
             text-decoration: none;
-            padding: 0.5rem 1rem;
-            border-radius: 6px;
-            transition: all 0.3s ease;
+            border-radius: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 0.95rem;
             font-weight: 500;
-            border: 1px solid transparent;
+            transition: all 0.2s ease;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
         }
         
-        .nav-link:hover {
-            background: #3498db;
-            color: white;
+        .btn:hover {
+            background: #5a67d8;
             transform: translateY(-1px);
-            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
         }
         
-        .nav-link.active {
-            background: #3498db;
-            color: white;
-            border-color: #2980b9;
-            box-shadow: 0 4px 12px rgba(52, 152, 219, 0.3);
+        .btn-primary { background: #3b82f6; }
+        .btn-primary:hover { background: #2563eb; }
+        
+        .btn-success { background: #10b981; }
+        .btn-success:hover { background: #059669; }
+        
+        .btn-danger { background: #ef4444; }
+        .btn-danger:hover { background: #dc2626; }
+        
+        .btn-warning { background: #f59e0b; color: white; }
+        .btn-warning:hover { background: #d97706; }
+        
+        .btn-secondary { background: #6b7280; }
+        .btn-secondary:hover { background: #4b5563; }
+        
+        /* Forms */
+        .form-group {
+            margin-bottom: 1.5rem;
         }
         
-        /* Mobile responsive */
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #374151;
+        }
+        
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 1rem;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            background: white;
+        }
+        
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
+        .form-group small {
+            display: block;
+            margin-top: 0.25rem;
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+        
+        .form-actions {
+            text-align: center;
+            margin-top: 2rem;
+        }
+        
+        .form-actions .btn {
+            margin: 0 0.5rem;
+        }
+        
+        /* Cards and Grid */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin: 1.5rem 0;
+        }
+        
+        .card {
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 1.5rem;
+            transition: all 0.2s ease;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .card:hover {
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            transform: translateY(-2px);
+        }
+        
+        .card h3 {
+            color: #1e293b;
+            margin-bottom: 1rem;
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+        
+        .card h4 {
+            color: #374151;
+            margin-bottom: 0.75rem;
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+        
+        /* Loading Spinner */
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 2rem 0;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f4f6;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 1rem;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Utilities */
+        .text-center { text-align: center; }
+        .text-left { text-align: left; }
+        .text-right { text-align: right; }
+        
+        .mb-1 { margin-bottom: 0.25rem; }
+        .mb-2 { margin-bottom: 0.5rem; }
+        .mb-3 { margin-bottom: 1rem; }
+        .mb-4 { margin-bottom: 1.5rem; }
+        .mb-5 { margin-bottom: 3rem; }
+        
+        .mt-1 { margin-top: 0.25rem; }
+        .mt-2 { margin-top: 0.5rem; }
+        .mt-3 { margin-top: 1rem; }
+        .mt-4 { margin-top: 1.5rem; }
+        .mt-5 { margin-top: 3rem; }
+        
+        /* Badge styling */
+        .badge {
+            display: inline-block;
+            padding: 0.25rem 0.75rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            border-radius: 9999px;
+            text-transform: uppercase;
+            letter-spacing: 0.025em;
+        }
+        
+        .badge-success {
+            background: #dcfce7;
+            color: #166534;
+        }
+        
+        .badge-danger {
+            background: #fef2f2;
+            color: #dc2626;
+        }
+        
+        .badge-warning {
+            background: #fefce8;
+            color: #a16207;
+        }
+        
+        .badge-info {
+            background: #eff6ff;
+            color: #1d4ed8;
+        }
+        
+        .badge-secondary {
+            background: #f1f5f9;
+            color: #64748b;
+        }
+        
+        /* Code styling */
+        code {
+            background: #f1f5f9;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+            font-size: 0.875rem;
+            color: #e11d48;
+        }
+        
+        pre {
+            background: #f8fafc;
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            border: 1px solid #e2e8f0;
+        }
+        
+        pre code {
+            background: none;
+            padding: 0;
+            color: inherit;
+        }
+        
+        /* Responsive Design */
         @media (max-width: 768px) {
-            .nav {
-                padding: 0.5rem;
+            .main-content {
+                padding: 1rem;
             }
             
-            .nav-link {
+            .page-header {
+                padding: 1.5rem;
+            }
+            
+            .content-section {
+                padding: 1.5rem;
+            }
+            
+            .grid {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+            
+            .form-actions .btn {
                 display: block;
-                margin: 5px 0;
-                padding: 0.5rem 1rem;
-                font-size: 0.9rem;
+                margin: 0.5rem 0;
+                width: 100%;
             }
         }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>🔍 Solanagram</h1>
+    {{ menu_html|safe }}
+    
+    <main class="main-content">
+        <div class="page-header">
+            <h1>{{ title }}</h1>
             <p>{{ subtitle }}</p>
         </div>
-        <div class="content">
-            {{ content }}
+        
+        <div class="content-section">
+            {{ content|safe }}
         </div>
-        <div class="footer">
-            <p>🔒 Privacy-first • 🚀 Multi-user • ⚡ Fast</p>
-        </div>
-    </div>
+    </main>
+    
+    {{ menu_scripts|safe }}
     
     <script>
-        // Utility functions
+        // Enhanced makeRequest function
         async function makeRequest(url, options = {}) {
             try {
                 console.log('makeRequest - URL:', url);
@@ -218,16 +396,20 @@ BASE_TEMPLATE = """
                     ...options.headers
                 };
                 
-                console.log('makeRequest - Headers:', headers);
-                
                 const response = await fetch(url, {
                     ...options,
                     headers
                 });
                 
-                console.log('makeRequest - Response status:', response.status);
+                if (response.status === 401) {
+                    localStorage.removeItem('access_token');
+                    localStorage.removeItem('session_token');
+                    window.location.href = '/login';
+                    return null;
+                }
+                
                 const jsonResult = await response.json();
-                console.log('makeRequest - JSON result:', jsonResult);
+                console.log('makeRequest - Result:', jsonResult);
                 return jsonResult;
             } catch (error) {
                 console.error('makeRequest - Error:', error);
@@ -235,48 +417,60 @@ BASE_TEMPLATE = """
             }
         }
         
+        // Loading state management
         function showLoading() {
-            const loading = document.querySelector('.loading');
-            if (loading) loading.style.display = 'block';
+            const loadingElements = document.querySelectorAll('.loading');
+            loadingElements.forEach(element => {
+                element.style.display = 'block';
+            });
         }
         
         function hideLoading() {
-            const loading = document.querySelector('.loading');
-            if (loading) loading.style.display = 'none';
+            const loadingElements = document.querySelectorAll('.loading');
+            loadingElements.forEach(element => {
+                element.style.display = 'none';
+            });
         }
         
+        // Enhanced message system
         function showMessage(message, type = 'info') {
-            const statusDiv = document.createElement('div');
-            statusDiv.className = `status ${type}`;
-            statusDiv.innerHTML = message;
+            // Remove existing messages
+            const existingMessages = document.querySelectorAll('.message');
+            existingMessages.forEach(msg => msg.remove());
             
-            const content = document.querySelector('.content');
-            content.insertBefore(statusDiv, content.firstChild);
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message message-${type}`;
+            messageDiv.innerHTML = message;
             
-            // Removed auto-removal - messages will stay until page reload
-        }
-        
-        // Global logout function
-        async function logout() {
-            if (confirm('Sei sicuro di voler uscire?')) {
-                try {
-                    const result = await makeRequest('/api/auth/logout', {
-                        method: 'POST'
-                    });
-                    
-                    // Reindirizza al login
-                    if (result && result.redirect) {
-                        window.location.href = result.redirect;
-                    } else {
-                        window.location.href = '/login';
+            const contentSection = document.querySelector('.content-section');
+            if (contentSection) {
+                contentSection.insertBefore(messageDiv, contentSection.firstChild);
+            }
+            
+            // Auto-remove success and info messages after 5 seconds
+            if (type === 'success' || type === 'info') {
+                setTimeout(() => {
+                    if (messageDiv.parentNode) {
+                        messageDiv.remove();
                     }
-                } catch (error) {
-                    console.error('Errore durante logout:', error);
-                    // Anche in caso di errore, reindirizza al login
-                    window.location.href = '/login';
-                }
+                }, 5000);
             }
         }
+        
+        // Page load animations
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add fade-in animation to content
+            const cards = document.querySelectorAll('.card');
+            cards.forEach((card, index) => {
+                card.style.opacity = '0';
+                card.style.transform = 'translateY(20px)';
+                setTimeout(() => {
+                    card.style.transition = 'all 0.5s ease';
+                    card.style.opacity = '1';
+                    card.style.transform = 'translateY(0)';
+                }, index * 100);
+            });
+        });
     </script>
 </body>
 </html>
@@ -844,44 +1038,42 @@ def dashboard():
     menu_html = get_unified_menu('dashboard')
     
     content = f"""
-    {menu_html}
+    <h2>Dashboard</h2>
     
-    <h2>📊 Dashboard</h2>
-    
-    <div class="status success">
-        ✅ Benvenuto, <strong>{user_data.get('phone_number', 'Utente')}</strong>
+    <div class="message message-success">
+        Benvenuto, <strong>{user_data.get('phone_number', 'Utente')}</strong>
     </div>
     
     <div class="grid">
         <div class="card">
-            <h3>👤 Il tuo account</h3>
+            <h3>Account Information</h3>
             <p><strong>Telefono:</strong> {user_data.get('phone_number', 'N/A')}</p>
             <p><strong>API ID:</strong> {user_data.get('api_id', 'N/A')}</p>
             <p><strong>Registrato:</strong> {user_data.get('created_at', 'N/A')[:10] if user_data.get('created_at') else 'N/A'}</p>
-            <p><strong>Stato:</strong> {'✅ Attivo' if user_data.get('is_active') else '❌ Disattivo'}</p>
+            <p><strong>Stato:</strong> <span class="badge badge-{'success' if user_data.get('is_active') else 'danger'}">{'Attivo' if user_data.get('is_active') else 'Disattivo'}</span></p>
             <br>
-            <a href="/profile" class="btn">📝 Gestisci Profilo</a>
+            <a href="/profile" class="btn btn-primary">Gestisci Profilo</a>
         </div>
         
         <div class="card">
-            <h3>💬 Le mie Chat</h3>
-            <p>Visualizza tutte le tue chat Telegram con ID e dettagli</p>
+            <h3>Chat Management</h3>
+            <p>Visualizza tutte le tue chat Telegram con ID e dettagli per la gestione dei reindirizzamenti</p>
             <br>
-            <a href="/chats" class="btn">Vedi tutte le chat</a>
+            <a href="/chats" class="btn btn-primary">Visualizza Chat</a>
         </div>
         
         <div class="card">
-            <h3>🔍 Trova Chat</h3>
-            <p>Cerca l'ID di una chat Telegram inserendo username o nome</p>
+            <h3>Chat Search</h3>
+            <p>Cerca l'ID di una chat Telegram inserendo username o nome del gruppo</p>
             <br>
-            <a href="/find" class="btn">Inizia ricerca</a>
+            <a href="/find" class="btn btn-primary">Cerca Chat</a>
         </div>
         
         <div class="card">
-            <h3>🔧 Stato Sistema</h3>
-            <p><strong>Backend:</strong> {'✅ Online' if backend_info and backend_info.get('status') == 'healthy' else '❌ Offline'}</p>
+            <h3>System Status</h3>
+            <p><strong>Backend:</strong> <span class="badge badge-{'success' if backend_info and backend_info.get('status') == 'healthy' else 'danger'}">{'Online' if backend_info and backend_info.get('status') == 'healthy' else 'Offline'}</span></p>
             <p><strong>Ambiente:</strong> <code>{ENVIRONMENT}</code></p>
-            <p><strong>Sessione:</strong> ✅ Attiva</p>
+            <p><strong>Sessione:</strong> <span class="badge badge-success">Attiva</span></p>
         </div>
     </div>
     """
@@ -890,7 +1082,10 @@ def dashboard():
         BASE_TEMPLATE,
         title="Dashboard",
         subtitle="Pannello di controllo",
-        content=Markup(content)
+        content=Markup(content),
+        menu_html=Markup(menu_html),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
     )
 
 @app.route('/profile')
@@ -1067,7 +1262,10 @@ def profile():
         BASE_TEMPLATE,
         title="Profilo",
         subtitle="Gestione account e credenziali",
-        content=Markup(content)
+        content=Markup(content),
+        menu_html=Markup(menu_html),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
     )
 
 @app.route('/chats')
@@ -1286,7 +1484,10 @@ def chats_list():
         BASE_TEMPLATE,
         title="Le mie Chat",
         subtitle="Gestione chat Telegram",
-        content=Markup(content)
+        content=Markup(content),
+        menu_html=Markup(menu_html),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
     )
 
 @app.route('/find')
@@ -1372,7 +1573,10 @@ def find_chat():
         BASE_TEMPLATE,
         title="Trova Chat",
         subtitle="Ricerca ID chat Telegram",
-        content=Markup(content)
+        content=Markup(content),
+        menu_html=Markup(menu_html),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
     )
 
 @app.route('/configured-channels')
@@ -1630,7 +1834,10 @@ def configured_channels():
         BASE_TEMPLATE,
         title="Tutti i Reindirizzamenti",
         subtitle="Gestione reindirizzamenti per canale",
-        content=Markup(content)
+        content=Markup(content),
+        menu_html=Markup(menu_html),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
     )
 
 @app.route('/forwarders/<source_chat_id>')
@@ -2250,7 +2457,10 @@ def forwarders_page(source_chat_id):
         BASE_TEMPLATE,
         title="Gestione Inoltri",
         subtitle=f"Chat ID: {source_chat_id}",
-        content=Markup(content)
+        content=Markup(content),
+        menu_html=Markup(menu_html),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
     )
 
 # ============================================
@@ -2478,7 +2688,10 @@ def not_found(error):
         BASE_TEMPLATE,
         title="Pagina non trovata",
         subtitle="Errore 404",
-        content=Markup(content)
+        content=Markup(content),
+        menu_html=Markup(""),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
     ), 404
 
 # ========================================================================================
@@ -2695,7 +2908,10 @@ def security_page():
         BASE_TEMPLATE,
         title="Sicurezza",
         subtitle="Gestione sicurezza e credenziali",
-        content=Markup(content)
+        content=Markup(content),
+        menu_html=Markup(menu_html),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
     )
 
 if __name__ == '__main__':
