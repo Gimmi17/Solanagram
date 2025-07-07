@@ -369,6 +369,8 @@ def login():
         Il sistema utilizza i token di autenticazione ufficiali di Telegram.<br>
         Se hai effettuato il login recentemente, puoi riutilizzare i token salvati senza richiedere nuovi codici SMS.<br>
         <small>Questo sistema ufficiale evita completamente i limiti di richieste a Telegram.</small>
+        <br><br>
+        <small>ℹ️ <strong>Nota:</strong> Il primo tentativo di connessione potrebbe richiedere qualche secondo in più per stabilire la connessione con i server Telegram. Se ricevi un errore, riprova cliccando nuovamente il pulsante.</small>
     </div>
     
     <form id="loginForm">
@@ -538,17 +540,20 @@ def login():
                 return;
             }
             
+            // FIXED: Better UX with informative loading message
             showLoading();
+            showMessage('🔄 Connessione a Telegram in corso... Il primo tentativo potrebbe richiedere qualche secondo in più.', 'info');
             
-            const result = await makeRequest('/api/auth/login', {
-                method: 'POST',
-                body: JSON.stringify({ 
-                    phone_number: phone,
-                    password: password 
-                })
-            });
-            
-            hideLoading();
+            try {
+                const result = await makeRequest('/api/auth/login', {
+                    method: 'POST',
+                    body: JSON.stringify({ 
+                        phone_number: phone,
+                        password: password 
+                    })
+                });
+                
+                hideLoading();
             
             if (result.success) {
                 // Salva user_id per la verifica
@@ -586,6 +591,10 @@ def login():
                 } else {
                     showMessage(result.error || 'Errore durante il login', 'error');
                 }
+            } catch (error) {
+                hideLoading();
+                console.error('Login error:', error);
+                showMessage('❌ Errore di connessione. Riprova tra qualche secondo.', 'error');
             }
         });
     </script>
