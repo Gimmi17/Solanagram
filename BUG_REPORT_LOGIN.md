@@ -93,9 +93,47 @@ await asyncio.wait_for(client.connect(), timeout=30.0)
 3. **Test timeout**: Simulare connessioni lente per verificare i retry
 4. **Test multiple sessioni**: Aprire più tab contemporaneamente per testare i conflitti
 
-## Status: 🟢 RISOLTO
-Il bug dovrebbe essere completamente risolto con queste modifiche. Il sistema ora gestisce correttamente:
-- Race conditions nei client Telegram
-- Conflitti nell'event loop
-- Timeout e retry automatici
-- User experience migliorata
+## Status: 🟢 RISOLTO - AGGIORNAMENTO
+
+### ⚡ CORREZIONE SPECIFICA PER "Cannot send requests while disconnected"
+
+Dopo ulteriori test, è emerso l'errore specifico "Cannot send requests while disconnected". Ho implementato correzioni aggiuntive:
+
+#### ✅ 5. Gestione robusta delle disconnessioni (`backend/app.py`)
+- **Funzione `ensure_client_connected()`**: Wrapper che garantisce connessione stabile prima di ogni operazione
+- **Verifica tripla**: 3 tentativi di connessione con test tramite `get_me()`
+- **Cleanup automatico**: Rimozione client disconnessi dalla cache prima di ricrearli
+- **Riconnessione intelligente**: Disconnette e riconnette il client se instabile
+
+#### ✅ 6. Gestione errori specifici di disconnessione
+- **Pattern matching avanzato**: Riconoscimento di tutti i tipi di errore di disconnessione
+- **Cleanup prima dei retry**: Rimozione client disconnessi da `active_clients`
+- **Messaggi user-friendly**: Errori specifici per problemi di connessione vs altri errori
+- **Logging dettagliato**: Emoji-coded logs per identificare rapidamente i problemi
+
+#### ✅ 7. Applicazione su tutte le operazioni Telegram
+- **`send_telegram_code_async`**: Verifica connessione robusta prima di `send_code_request`
+- **`verify_telegram_code_async`**: Gestione disconnessioni durante verifica codice
+- **Pattern uniforme**: Stessa logica applicata a tutte le operazioni critiche
+
+#### ✅ 8. Miglioramenti UX finali
+- **Messaggi informativi**: "Il sistema effettuerà automaticamente dei tentativi"
+- **Retry automatici trasparenti**: L'utente vede progress invece di errori tecnici
+- **Fallback graceful**: Se tutti i tentativi falliscono, messaggio chiaro su cosa fare
+
+## Status: 🟢 COMPLETAMENTE RISOLTO
+Il sistema ora gestisce completamente:
+- ✅ Race conditions nei client Telegram
+- ✅ Conflitti nell'event loop  
+- ✅ Timeout e retry automatici
+- ✅ **Errori di disconnessione "Cannot send requests while disconnected"**
+- ✅ User experience ottimizzata con retry trasparenti
+- ✅ Cleanup automatico dei client disconnessi
+- ✅ Gestione robusta di tutte le operazioni Telegram
+
+### 🎯 Risultato Finale
+L'errore "Cannot send requests while disconnected" non dovrebbe più verificarsi. Il sistema:
+1. **Verifica sempre** la connessione prima di ogni operazione
+2. **Riconnette automaticamente** se necessario  
+3. **Gestisce gracefully** le disconnessioni durante le operazioni
+4. **Informa l'utente** sui tentativi automatici senza mostrare errori tecnici

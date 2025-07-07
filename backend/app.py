@@ -329,13 +329,26 @@ async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string
         # FIXED: Shorter stabilization delay
         await asyncio.sleep(0.2)
         
-        # Verify connection is actually working
-        try:
-            await asyncio.wait_for(client.get_me(), timeout=5.0)
-            logger.info(f"Client connection verified for {phone}")
-        except:
-            # Connection not fully working, but don't fail - let the calling function handle it
-            logger.warning(f"Could not verify client connection for {phone}, but proceeding")
+        # FIXED: Enhanced connection verification with multiple attempts
+        connection_verified = False
+        for verify_attempt in range(3):
+            try:
+                await asyncio.wait_for(client.get_me(), timeout=8.0)
+                logger.info(f"Client connection verified for {phone} (attempt {verify_attempt + 1})")
+                connection_verified = True
+                break
+            except Exception as verify_error:
+                logger.warning(f"Connection verification attempt {verify_attempt + 1} failed for {phone}: {verify_error}")
+                if verify_attempt < 2:  # Try to reconnect if not last attempt
+                    try:
+                        await client.disconnect()
+                        await asyncio.sleep(0.5)  # Brief pause
+                        await asyncio.wait_for(client.connect(), timeout=10.0)
+                    except Exception as reconnect_error:
+                        logger.warning(f"Reconnection attempt failed for {phone}: {reconnect_error}")
+                        
+        if not connection_verified:
+            logger.warning(f"Could not verify client connection for {phone} after 3 attempts, but proceeding")
         
         # Store the new client
         active_clients[phone] = client
@@ -354,6 +367,36 @@ async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string
         if phone in active_clients:
             del active_clients[phone]
         return None
+
+
+async def ensure_client_connected(client: TelegramClient, phone: str, max_attempts: int = 3) -> bool:
+    """
+    FIXED: Ensure the Telegram client is connected and working before operations.
+    Returns True if client is ready, False if all attempts failed.
+    """
+    for attempt in range(max_attempts):
+        try:
+            if not client.is_connected():
+                logger.info(f"Client not connected for {phone}, attempting to connect (attempt {attempt + 1})")
+                await asyncio.wait_for(client.connect(), timeout=10.0)
+            
+            if client.is_connected():
+                # Test the connection with a simple operation
+                await asyncio.wait_for(client.get_me(), timeout=5.0)
+                logger.info(f"Client connection confirmed for {phone}")
+                return True
+                
+        except Exception as e:
+            logger.warning(f"Connection attempt {attempt + 1} failed for {phone}: {e}")
+            if attempt < max_attempts - 1:  # Not the last attempt
+                try:
+                    await client.disconnect()
+                    await asyncio.sleep(1.0)  # Wait before retry
+                except:
+                    pass
+    
+    logger.error(f"All {max_attempts} connection attempts failed for {phone}")
+    return False
 
 # ========================================================================================
 # CODE CACHING SYSTEM
@@ -479,33 +522,59 @@ async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, passw
                     return {"success": False, "status": "error", "error": last_error}
                 continue
 
-            # FIXED: Better connection verification
-            if not client.is_connected():
-                logger.warning(f"Client for {phone} not connected, attempting to reconnect...")
-                try:
-                    await asyncio.wait_for(client.connect(), timeout=10.0)
-                except asyncio.TimeoutError:
-                    last_error = "Connection timeout to Telegram servers"
+            # FIXED: Use robust connection verification
+            if not await ensure_client_connected(client, phone, max_attempts=3):
+                last_error = "Impossibile stabilire una connessione stabile con Telegram"
+                if attempt == max_retries - 1:
+                    return {"success": False, "status": "error", "error": last_error}
+                continue
+
+            # FIXED: Enhanced send_code_request with connection safeguards
+            try:
+                # Final connection check before critical operation
+                if not client.is_connected():
+                    logger.error(f"Client unexpectedly disconnected for {phone} just before send_code_request")
+                    last_error = "Connessione interrotta inaspettatamente"
                     if attempt == max_retries - 1:
                         return {"success": False, "status": "error", "error": last_error}
                     continue
                 
-                if not client.is_connected():
-                    last_error = "Cannot establish connection to Telegram servers"
-                    if attempt == max_retries - 1:
-                        return {"success": False, "status": "error", "error": last_error}
-                    continue
-
-            # FIXED: Added timeout and better error handling for send_code_request
-            try:
+                # Send the code request with timeout
                 result = await asyncio.wait_for(client.send_code_request(phone, force_sms=True), timeout=15.0)
+                
             except asyncio.TimeoutError:
                 last_error = "Timeout while requesting verification code"
                 if attempt == max_retries - 1:
                     return {"success": False, "status": "error", "error": last_error}
                 continue
             except Exception as e:
-                last_error = f"Error requesting verification code: {str(e)}"
+                error_str = str(e).lower()
+                # Handle specific disconnection errors with detailed logging
+                if any(phrase in error_str for phrase in [
+                    "cannot send requests while disconnected",
+                    "disconnected", 
+                    "not connected",
+                    "connection lost",
+                    "connection closed"
+                ]):
+                    logger.warning(f"🔌 Disconnection detected during send_code_request for {phone}: {e}")
+                    last_error = "Connessione a Telegram interrotta. Il sistema riproverà automaticamente..."
+                    
+                    # Clean up the disconnected client before retry
+                    if phone in active_clients:
+                        try:
+                            await active_clients[phone].disconnect()
+                        except:
+                            pass
+                        del active_clients[phone]
+                    
+                elif "flood" in error_str:
+                    logger.warning(f"🚫 Flood wait detected for {phone}: {e}")
+                    last_error = f"Limite Telegram raggiunto: {str(e)}"
+                else:
+                    logger.error(f"❌ Unexpected error during send_code_request for {phone}: {e}")
+                    last_error = f"Errore inaspettato: {str(e)}"
+                
                 if attempt == max_retries - 1:
                     return {"success": False, "status": "error", "error": last_error}
                 continue
@@ -571,6 +640,10 @@ async def verify_telegram_code_async(phone: str, code: str) -> dict:
     client = await get_telethon_client(phone, api_id, api_hash)
     if not client:
         return {"success": False, "status": "error", "error": get_error_message('TELEGRAM_CLIENT_FAILED')}
+    
+    # FIXED: Ensure client is connected before verification
+    if not await ensure_client_connected(client, phone, max_attempts=3):
+        return {"success": False, "status": "error", "error": "Impossibile stabilire connessione per la verifica del codice"}
         
     try:
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
@@ -610,8 +683,20 @@ async def verify_telegram_code_async(phone: str, code: str) -> dict:
         return {"success": False, "status": "error", "error": f"{get_error_message('FLOOD_WAIT')} (Attendi {e.seconds} secondi)"}
         
     except Exception as e:
-        logger.error(f"An error occurred during sign in for {phone}: {e}")
-        return {"success": False, "status": "error", "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}
+        error_str = str(e).lower()
+        # FIXED: Handle disconnection errors during code verification
+        if any(phrase in error_str for phrase in [
+            "cannot send requests while disconnected",
+            "disconnected", 
+            "not connected",
+            "connection lost",
+            "connection closed"
+        ]):
+            logger.warning(f"🔌 Connection lost during code verification for {phone}: {e}")
+            return {"success": False, "status": "error", "error": "Connessione persa durante la verifica. Riprova l'operazione."}
+        else:
+            logger.error(f"An error occurred during sign in for {phone}: {e}")
+            return {"success": False, "status": "error", "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}
 
     # If sign in is successful, clean up Redis and find user in DB
     redis_conn.delete(verification_key)

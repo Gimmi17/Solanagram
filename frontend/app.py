@@ -370,7 +370,7 @@ def login():
         Se hai effettuato il login recentemente, puoi riutilizzare i token salvati senza richiedere nuovi codici SMS.<br>
         <small>Questo sistema ufficiale evita completamente i limiti di richieste a Telegram.</small>
         <br><br>
-        <small>ℹ️ <strong>Nota:</strong> Il primo tentativo di connessione potrebbe richiedere qualche secondo in più per stabilire la connessione con i server Telegram. Se ricevi un errore, riprova cliccando nuovamente il pulsante.</small>
+        <small>ℹ️ <strong>Nota:</strong> Il sistema effettua automaticamente più tentativi per garantire una connessione stabile con i server Telegram. Se la connessione si interrompe, verrà automaticamente ristabilita. In caso di errori persistenti, il pulsante "Invia codice" può essere cliccato nuovamente.</small>
     </div>
     
     <form id="loginForm">
@@ -542,7 +542,7 @@ def login():
             
             // FIXED: Better UX with informative loading message
             showLoading();
-            showMessage('🔄 Connessione a Telegram in corso... Il primo tentativo potrebbe richiedere qualche secondo in più.', 'info');
+            showMessage('🔄 Connessione a Telegram in corso... Il sistema effettuerà automaticamente dei tentativi per garantire una connessione stabile.', 'info');
             
             try {
                 const result = await makeRequest('/api/auth/login', {
