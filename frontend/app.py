@@ -10,7 +10,7 @@ import os
 import logging
 import json
 from typing import Dict, Any, Optional
-from flask import Flask, render_template_string, request, jsonify, redirect, url_for, session
+from flask import Flask, render_template, render_template_string, request, jsonify, redirect, url_for, session
 from markupsafe import Markup
 import requests
 from datetime import datetime
@@ -306,7 +306,7 @@ def call_backend(endpoint: str, method: str = 'GET', data: Optional[Dict] = None
         if method.upper() == 'POST':
             response = requests.post(url, json=data, headers=headers, timeout=30)
         elif method.upper() == 'PUT':
-            response = requests.put(url, json=data, headers=headers, timeout=30)
+            response = requests_put(url, json=data, headers=headers, timeout=30)
         else:
             response = requests.get(url, headers=headers, timeout=30)
 
@@ -2520,8 +2520,127 @@ def api_check_credentials_status():
     return jsonify(result or {'error': 'Backend non disponibile'})
 
 # ========================================================================================
+# CRYPTO SIGNAL API PROXIES
+# ========================================================================================
+
+@app.route('/api/crypto/processors', methods=['GET', 'POST'])
+def api_crypto_processors():
+    """Proxy per gestione processori crypto"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    if request.method == 'GET':
+        result = call_backend('/api/crypto/processors', 'GET', auth_token=session['session_token'])
+    else:
+        data = request.get_json()
+        result = call_backend('/api/crypto/processors', 'POST', data, auth_token=session['session_token'])
+    
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/crypto/test-parse', methods=['POST'])
+def api_crypto_test_parse():
+    """Proxy per test parser crypto"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    data = request.get_json()
+    result = call_backend('/api/crypto/test-parse', 'POST', data, auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/crypto/signals/<source_chat_id>', methods=['GET'])
+def api_crypto_signals(source_chat_id):
+    """Proxy per recupero segnali crypto"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    query_string = request.query_string.decode()
+    endpoint = f'/api/crypto/signals/{source_chat_id}'
+    if query_string:
+        endpoint += f'?{query_string}'
+    
+    result = call_backend(endpoint, 'GET', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/crypto/top-performers', methods=['GET'])
+def api_crypto_top_performers():
+    """Proxy per top performers crypto"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    query_string = request.query_string.decode()
+    endpoint = '/api/crypto/top-performers'
+    if query_string:
+        endpoint += f'?{query_string}'
+    
+    result = call_backend(endpoint, 'GET', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/crypto/process-message', methods=['POST'])
+def api_crypto_process_message():
+    """Proxy per processare messaggio crypto"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    data = request.get_json()
+    result = call_backend('/api/crypto/process-message', 'POST', data, auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+# ========================================================================================
 # EXISTING API PROXIES
 # ========================================================================================
+
+@app.route('/crypto-signals')
+@require_auth
+def crypto_signals():
+    """Pagina per il processamento dei segnali crypto"""
+    return render_template('crypto_signals.html')
+
+@app.route('/crypto-dashboard')
+@require_auth
+def crypto_dashboard():
+    """Dashboard principale per le funzionalità crypto"""
+    
+    # Use unified menu
+    menu_html = get_unified_menu('crypto-dashboard')
+    
+    content = f"""
+    {menu_html}
+    
+    <h2>🚀 Crypto Signal Management</h2>
+    
+    <div class="grid">
+        <div class="card">
+            <h3>⚙️ Configuratore Regole</h3>
+            <p>Configura le regole di estrazione dati per i tuoi gruppi crypto.</p>
+            <a href="/crypto-configurator" class="btn btn-primary">
+                🔧 Configura Estrattore
+            </a>
+        </div>
+        
+        <div class="card">
+            <h3>📊 Storico Messaggi</h3>
+            <p>Visualizza tutti i messaggi crypto processati e i dati estratti.</p>
+            <a href="/crypto-history" class="btn btn-info">
+                📈 Visualizza Storico
+            </a>
+        </div>
+        
+        <div class="card">
+            <h3>🧪 Test Parser</h3>
+            <p>Testa il parser sui tuoi messaggi crypto (modalità legacy).</p>
+            <a href="/crypto-signals" class="btn btn-secondary">
+                🔍 Test Parser
+            </a>
+        </div>
+    </div>
+    """
+    
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Crypto Dashboard",
+        subtitle="Gestione segnali crypto",
+        content=Markup(content)
+    )
 
 @app.route('/security')
 @require_auth
@@ -2697,6 +2816,1585 @@ def security_page():
         subtitle="Gestione sicurezza e credenziali",
         content=Markup(content)
     )
+
+@app.route('/message-manager')
+@require_auth
+def message_manager():
+    """Pagina gestione messaggi unificata"""
+    
+    # Use unified menu
+    menu_html = get_unified_menu('message-manager')
+    
+    # Define JavaScript separately to avoid syntax conflicts
+    script_content = """
+    <script>
+        let allChats = [];
+        let filteredChats = [];
+        let listeners = {};
+        
+        document.addEventListener('DOMContentLoaded', async () => {
+            await loadChats();
+            await loadListeners();
+        });
+        
+        async function loadChats() {
+            showLoading();
+            
+            try {
+                const result = await makeRequest('/api/telegram/get-chats', {
+                    method: 'GET'
+                });
+                
+                hideLoading();
+                
+                if (result.success) {
+                    allChats = result.chats;
+                    filteredChats = [...allChats];
+                    
+                    document.getElementById('chatsContainer').style.display = 'block';
+                    document.getElementById('searchFilter').addEventListener('input', filterChats);
+                    
+                    // Load listeners before rendering
+                    await loadListeners();
+                    renderChats();
+                } else {
+                    showError(result.error || 'Errore durante il caricamento chat');
+                }
+            } catch (error) {
+                hideLoading();
+                showError('Errore di connessione');
+            }
+        }
+        
+        async function loadListeners() {
+            try {
+                const result = await makeRequest('/api/message-listeners', {
+                    method: 'GET'
+                });
+                
+                if (result.success) {
+                    // Create a map of chat_id -> listener
+                    listeners = {};
+                    result.listeners.forEach(listener => {
+                        listeners[listener.source_chat_id] = listener;
+                    });
+                }
+            } catch (error) {
+                console.error('Error loading listeners:', error);
+            }
+        }
+        
+        function renderChats() {
+            const container = document.getElementById('chatsList');
+            
+            if (filteredChats.length === 0) {
+                container.innerHTML = `
+                    <div class="status warning">
+                        <p>🔍 Nessuna chat trovata con i criteri di ricerca</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = `
+                <div style="margin-bottom: 20px;">
+                    <strong>📊 ${filteredChats.length} chat trovate</strong>
+                </div>
+                
+                ${filteredChats.map(chat => {
+                    const listener = listeners[chat.id];
+                    const isListening = listener && listener.container_status === 'running';
+                    const hasElaborations = listener && listener.elaboration_count > 0;
+                    
+                    return `
+                    <div class="card" style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div style="flex: 1;">
+                                <h3>${escapeHtml(chat.title)} ${getChatIcon(chat.type)}</h3>
+                                <p><strong>ID:</strong> <code>${chat.id}</code></p>
+                                <p><strong>Tipo:</strong> ${getChatTypeLabel(chat.type)}</p>
+                                ${chat.username ? `<p><strong>Username:</strong> @${chat.username}</p>` : ''}
+                                ${chat.members_count ? `<p><strong>Membri:</strong> ${chat.members_count}</p>` : ''}
+                                
+                                ${listener ? `
+                                    <div style="margin-top: 10px; padding: 10px; background: #f0f8ff; border-radius: 5px;">
+                                        <p><strong>📊 Stato:</strong> <span class="${isListening ? 'text-success' : 'text-danger'}">${isListening ? '✅ In ascolto' : '❌ Fermo'}</span></p>
+                                        <p><strong>📨 Messaggi ricevuti:</strong> ${listener.messages_received || 0}</p>
+                                        ${listener.last_message_at ? `<p><strong>🕐 Ultimo messaggio:</strong> ${new Date(listener.last_message_at).toLocaleString('it-IT')}</p>` : ''}
+                                        ${hasElaborations ? `<p><strong>🔧 Elaborazioni:</strong> ${listener.elaboration_count} (${listener.extractor_count} extractor, ${listener.redirect_count} redirect)</p>` : ''}
+                                    </div>
+                                ` : ''}
+                                
+                                <div style="margin-top: 15px;">
+                                    ${!listener ? `
+                                        <button onclick="activateListener('${chat.id}', '${escapeHtml(chat.title).replace(/'/g, "\\\\'")}', '${chat.type}')" class="btn btn-primary">
+                                            📡 Attiva ascolto messaggi
+                                        </button>
+                                    ` : `
+                                        <button onclick="toggleListener('${listener.id}', ${isListening})" class="btn ${isListening ? 'btn-warning' : 'btn-success'}">
+                                            ${isListening ? '⏸️ Ferma ascolto' : '▶️ Riprendi ascolto'}
+                                        </button>
+                                        <button onclick="window.location.href='/message-elaborations/${listener.id}'" class="btn btn-primary" style="margin-left: 10px;">
+                                            🔧 Gestisci elaborazioni
+                                        </button>
+                                        <button onclick="deleteListener('${listener.id}')" class="btn btn-danger" style="margin-left: 10px;">
+                                            🗑️ Elimina
+                                        </button>
+                                    `}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    `;
+                }).join('')}
+            `;
+        }
+        
+        async function activateListener(chatId, chatTitle, chatType) {
+            if (!confirm(`Vuoi attivare l'ascolto messaggi per "${chatTitle}"?`)) {
+                return;
+            }
+            
+            showMessage('Attivazione ascolto messaggi...', 'info');
+            
+            try {
+                const result = await makeRequest('/api/message-listeners', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        source_chat_id: chatId,
+                        source_chat_title: chatTitle,
+                        source_chat_type: chatType
+                    })
+                });
+                
+                if (result.success) {
+                    showMessage('✅ Ascolto messaggi attivato con successo!', 'success');
+                    await loadListeners();
+                    renderChats();
+                } else {
+                    // Show detailed error message
+                    let errorMsg = `❌ Errore durante l'attivazione`;
+                    if (result.error) {
+                        errorMsg += `: ${result.error}`;
+                    }
+                    if (result.details) {
+                        errorMsg += `<br><small>Dettagli: ${result.details}</small>`;
+                    }
+                    showMessage(errorMsg, 'error');
+                }
+            } catch (error) {
+                console.error('Error activating listener:', error);
+                let errorMsg = '❌ Errore di connessione durante l\'attivazione';
+                
+                // Check if it's a specific HTTP error
+                if (error.message && error.message.includes('HTTP error')) {
+                    errorMsg += `<br><small>Codice errore: ${error.message}</small>`;
+                } else if (error.message) {
+                    errorMsg += `<br><small>Dettagli: ${error.message}</small>`;
+                }
+                
+                showMessage(errorMsg, 'error');
+            }
+        }
+        
+        async function toggleListener(listenerId, isRunning) {
+            const action = isRunning ? 'stop' : 'start';
+            
+            try {
+                const result = await makeRequest(`/api/message-listeners/${listenerId}/${action}`, {
+                    method: 'POST'
+                });
+                
+                if (result.success) {
+                    showMessage(`✅ Listener ${isRunning ? 'fermato' : 'riavviato'} con successo!`, 'success');
+                    await loadListeners();
+                    renderChats();
+                } else {
+                    showMessage(`❌ Errore: ${result.error}`, 'error');
+                }
+            } catch (error) {
+                console.error('Error toggling listener:', error);
+                showMessage('❌ Errore di connessione', 'error');
+            }
+        }
+        
+        async function deleteListener(listenerId) {
+            if (!confirm('Sei sicuro di voler eliminare questo listener? Verranno eliminate anche tutte le elaborazioni associate.')) {
+                return;
+            }
+            
+            try {
+                const result = await makeRequest(`/api/message-listeners/${listenerId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (result.success) {
+                    showMessage('✅ Listener eliminato con successo!', 'success');
+                    await loadListeners();
+                    renderChats();
+                } else {
+                    showMessage(`❌ Errore: ${result.error}`, 'error');
+                }
+            } catch (error) {
+                console.error('Error deleting listener:', error);
+                showMessage('❌ Errore di connessione', 'error');
+            }
+        }
+        
+        function filterChats() {
+            const query = document.getElementById('searchFilter').value.toLowerCase().trim();
+            
+            if (!query) {
+                filteredChats = [...allChats];
+            } else {
+                filteredChats = allChats.filter(chat => 
+                    chat.title.toLowerCase().includes(query) ||
+                    chat.id.toString().includes(query) ||
+                    (chat.username && chat.username.toLowerCase().includes(query))
+                );
+            }
+            
+            renderChats();
+        }
+        
+        function getChatIcon(type) {
+            switch(type) {
+                case 'private': return '👤';
+                case 'group': return '👥';
+                case 'supergroup': return '👥';
+                case 'channel': return '📢';
+                default: return '💬';
+            }
+        }
+        
+        function getChatTypeLabel(type) {
+            switch(type) {
+                case 'private': return 'Chat privata';
+                case 'group': return 'Gruppo';
+                case 'supergroup': return 'Supergruppo';
+                case 'channel': return 'Canale';
+                default: return type;
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('errorContainer').style.display = 'block';
+            document.getElementById('chatsContainer').style.display = 'none';
+        }
+        
+        function showLoading() {
+            document.querySelector('.loading').style.display = 'block';
+        }
+        
+        function hideLoading() {
+            document.querySelector('.loading').style.display = 'none';
+        }
+    </script>
+    """
+    
+    content = f"""
+    {menu_html}
+    
+    <h2>📨 Gestione Messaggi</h2>
+    
+    <div class="status info">
+        ℹ️ Configura l'ascolto dei messaggi e le elaborazioni per ogni chat
+    </div>
+    
+    <div class="loading">
+        <div class="spinner"></div>
+        <p>Caricamento chat...</p>
+    </div>
+    
+    <div id="chatsContainer" style="display: none;">
+        <div style="margin-bottom: 30px; padding: 20px; border: 1px solid #dee2e6; border-radius: 8px; background: #f8f9fa;">
+            <h3>🔍 Filtra chat</h3>
+            <div class="form-group">
+                <input type="text" id="searchFilter" placeholder="Cerca per nome, ID o username..." 
+                       style="width: 100%; padding: 10px; border: 1px solid #ced4da; border-radius: 4px;">
+                <small>Ricerca in tempo reale</small>
+            </div>
+        </div>
+        
+        <div id="chatsList"></div>
+    </div>
+    
+    <div id="errorContainer" style="display: none;">
+        <div class="status error">
+            <h3>❌ Errore</h3>
+            <p id="errorMessage"></p>
+        </div>
+    </div>
+    
+    {script_content}
+    """
+    
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Gestione Messaggi",
+        subtitle="Configura ascolto e elaborazioni",
+        content=Markup(content)
+    )
+
+@app.route('/message-elaborations/<int:listener_id>')
+@require_auth
+def message_elaborations(listener_id):
+    """Pagina gestione elaborazioni per un listener"""
+    
+    # Use unified menu
+    menu_html = get_unified_menu('message-manager')
+    
+    content = f"""
+    {menu_html}
+    
+    <h2>🔧 Gestione Elaborazioni</h2>
+    <p><a href="/message-manager">← Torna a Gestione Messaggi</a></p>
+    
+    <div class="card" style="margin-bottom: 20px;">
+        <h3 id="listenerTitle">Caricamento...</h3>
+        <p><strong>ID Listener:</strong> {listener_id}</p>
+        <p id="listenerStats"></p>
+    </div>
+    
+    <div class="loading">
+        <div class="spinner"></div>
+        <p>Caricamento elaborazioni...</p>
+    </div>
+    
+    <div id="elaborationsContainer" style="display: none;">
+        <div style="margin-bottom: 20px;">
+            <button onclick="showNewElaborationForm()" class="btn btn-success">
+                ➕ Aggiungi elaborazione
+            </button>
+        </div>
+        
+        <div id="newElaborationForm" style="display: none; margin-bottom: 20px;" class="card">
+            <h3>➕ Nuova Elaborazione</h3>
+            <form onsubmit="createElaboration(event)">
+                <div class="form-group">
+                    <label>Tipo elaborazione</label>
+                    <select id="elaborationType" name="elaborationType" required onchange="updateElaborationForm()">
+                        <option value="">Seleziona...</option>
+                        <option value="extractor">🔍 Extractor - Estrai dati dai messaggi</option>
+                        <option value="redirect">🔄 Redirect - Inoltra a un'altra chat</option>
+                    </select>
+                </div>
+                
+                <div id="elaborationConfig" style="display: none;">
+                    <!-- Dynamic content based on type -->
+                </div>
+                
+                <div class="form-actions" style="display: none;" id="formActions">
+                    <button type="submit" class="btn btn-primary">✅ Crea elaborazione</button>
+                    <button type="button" onclick="hideNewElaborationForm()" class="btn">❌ Annulla</button>
+                </div>
+            </form>
+        </div>
+        
+        <div id="elaborationsList"></div>
+    </div>
+    
+    <div id="errorContainer" style="display: none;">
+        <div class="status error">
+            <h3>❌ Errore</h3>
+            <p id="errorMessage"></p>
+        </div>
+    </div>
+    
+    <script>
+        const listenerId = {listener_id};
+        let listener = null;
+        let elaborations = [];
+        let availableChats = [];
+        
+        document.addEventListener('DOMContentLoaded', async () => {{
+            await loadListener();
+            await loadElaborations();
+            await loadAvailableChats();
+        }});
+        
+        async function loadListener() {{
+            try {{
+                const result = await makeRequest('/api/message-listeners', {{
+                    method: 'GET'
+                }});
+                
+                if (result.success) {{
+                    listener = result.listeners.find(l => l.id === listenerId);
+                    if (listener) {{
+                        document.getElementById('listenerTitle').innerHTML = `
+                            📡 Listener: ${{escapeHtml(listener.source_chat_title)}}
+                        `;
+                        document.getElementById('listenerStats').innerHTML = `
+                            <strong>Messaggi ricevuti:</strong> ${{listener.messages_received || 0}} |
+                            <strong>Stato:</strong> <span class="${{listener.container_status === 'running' ? 'text-success' : 'text-danger'}}">${{listener.container_status}}</span>
+                        `;
+                    }}
+                }}
+            }} catch (error) {{
+                console.error('Error loading listener:', error);
+            }}
+        }}
+        
+        async function loadElaborations() {{
+            showLoading();
+            
+            try {{
+                const result = await makeRequest(`/api/message-listeners/${{listenerId}}/elaborations`, {{
+                    method: 'GET'
+                }});
+                
+                hideLoading();
+                
+                if (result.success) {{
+                    elaborations = result.elaborations;
+                    document.getElementById('elaborationsContainer').style.display = 'block';
+                    renderElaborations();
+                }} else {{
+                    showError(result.error || 'Errore durante il caricamento elaborazioni');
+                }}
+            }} catch (error) {{
+                hideLoading();
+                showError('Errore di connessione');
+            }}
+        }}
+        
+        async function loadAvailableChats() {{
+            try {{
+                const result = await makeRequest('/api/telegram/get-chats', {{
+                    method: 'GET'
+                }});
+                
+                if (result.success) {{
+                    availableChats = result.chats;
+                }}
+            }} catch (error) {{
+                console.error('Error loading chats:', error);
+            }}
+        }}
+        
+        function renderElaborations() {{
+            const container = document.getElementById('elaborationsList');
+            
+            if (elaborations.length === 0) {{
+                container.innerHTML = `
+                    <div class="status info">
+                        <p>📭 Nessuna elaborazione configurata</p>
+                        <p>Clicca su "Aggiungi elaborazione" per iniziare</p>
+                    </div>
+                `;
+                return;
+            }}
+            
+            container.innerHTML = `
+                <div style="margin-bottom: 20px;">
+                    <strong>📊 ${{elaborations.length}} elaborazioni configurate</strong>
+                </div>
+                
+                ${{elaborations.map(elab => `
+                    <div class="card" style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div style="flex: 1;">
+                                <h4>${{getElaborationIcon(elab.elaboration_type)}} ${{escapeHtml(elab.elaboration_name)}}</h4>
+                                <p><strong>Tipo:</strong> ${{getElaborationTypeLabel(elab.elaboration_type)}}</p>
+                                <p><strong>Stato:</strong> <span class="${{elab.is_active ? 'text-success' : 'text-danger'}}">${{elab.is_active ? '✅ Attivo' : '❌ Disattivo'}}</span></p>
+                                <p><strong>Messaggi processati:</strong> ${{elab.processed_count || 0}}</p>
+                                ${{elab.error_count > 0 ? `<p class="text-danger"><strong>Errori:</strong> ${{elab.error_count}}</p>` : ''}}
+                                
+                                ${{renderElaborationConfig(elab)}}
+                                
+                                <div style="margin-top: 15px;">
+                                    <button onclick="toggleElaboration(${{elab.id}}, ${{elab.is_active}})" class="btn ${{elab.is_active ? 'btn-warning' : 'btn-success'}}">
+                                        ${{elab.is_active ? '⏸️ Disattiva' : '▶️ Attiva'}}
+                                    </button>
+                                    <button onclick="deleteElaboration(${{elab.id}})" class="btn btn-danger" style="margin-left: 10px;">
+                                        🗑️ Elimina
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('')}}
+            `;
+        }}
+        
+        function renderElaborationConfig(elab) {{
+            const config = elab.config || {{}};
+            
+            if (elab.elaboration_type === 'extractor') {{
+                const rules = config.rules || [];
+                return `
+                    <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 5px;">
+                        <strong>Regole di estrazione:</strong>
+                        <ul>
+                            ${{rules.map(rule => `
+                                <li>
+                                    <strong>${{escapeHtml(rule.rule_name)}}:</strong> 
+                                    Cerca "${{escapeHtml(rule.search_text)}}" e estrai ${{rule.value_length}} caratteri
+                                </li>
+                            `).join('')}}
+                        </ul>
+                    </div>
+                `;
+            }} else if (elab.elaboration_type === 'redirect') {{
+                return `
+                    <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 5px;">
+                        <p><strong>Destinazione:</strong> ${{escapeHtml(config.target_name || config.target_id)}}</p>
+                        <p><strong>Tipo:</strong> ${{config.target_type}}</p>
+                    </div>
+                `;
+            }}
+            
+            return '';
+        }}
+        
+        function showNewElaborationForm() {{
+            document.getElementById('newElaborationForm').style.display = 'block';
+        }}
+        
+        function hideNewElaborationForm() {{
+            document.getElementById('newElaborationForm').style.display = 'none';
+            document.getElementById('elaborationType').value = '';
+            document.getElementById('elaborationConfig').innerHTML = '';
+            document.getElementById('elaborationConfig').style.display = 'none';
+            document.getElementById('formActions').style.display = 'none';
+        }}
+        
+        function updateElaborationForm() {{
+            const type = document.getElementById('elaborationType').value;
+            const configDiv = document.getElementById('elaborationConfig');
+            const formActions = document.getElementById('formActions');
+            
+            if (!type) {{
+                configDiv.style.display = 'none';
+                formActions.style.display = 'none';
+                return;
+            }}
+            
+            configDiv.style.display = 'block';
+            formActions.style.display = 'block';
+            
+            if (type === 'extractor') {{
+                configDiv.innerHTML = `
+                    <h4>Regole di estrazione</h4>
+                    <div id="extractorRules">
+                        <div class="rule-row" data-rule-index="0">
+                            <div class="form-group">
+                                <label>Nome regola</label>
+                                <input type="text" name="rule_name[]" class="form-control" placeholder="es. token_address" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Testo da cercare</label>
+                                <input type="text" name="search_text[]" class="form-control" placeholder="es. Address: " required>
+                            </div>
+                            <div class="form-group">
+                                <label>Lunghezza valore da estrarre</label>
+                                <input type="number" name="value_length[]" class="form-control" placeholder="44" min="1" required>
+                            </div>
+                            <button type="button" class="btn btn-danger btn-sm" onclick="removeRule(0)">🗑️ Rimuovi</button>
+                        </div>
+                    </div>
+                    <button type="button" class="btn btn-success btn-sm" onclick="addRule()">➕ Aggiungi regola</button>
+                `;
+            }} else if (type === 'redirect') {{
+                // Check if redirect already exists
+                const hasRedirect = elaborations.some(e => e.elaboration_type === 'redirect');
+                if (hasRedirect) {{
+                    configDiv.innerHTML = `
+                        <div class="status error">
+                            <p>⚠️ È già presente un redirect per questo listener</p>
+                            <p>Puoi avere solo un redirect per chat</p>
+                        </div>
+                    `;
+                    formActions.style.display = 'none';
+                    return;
+                }}
+                
+                configDiv.innerHTML = `
+                    <h4>Destinazione redirect</h4>
+                    <div class="form-group">
+                        <label>Tipo destinazione</label>
+                        <select name="target_type" required onchange="updateTargetOptions()">
+                            <option value="">Seleziona...</option>
+                            <option value="user">👤 Utente</option>
+                            <option value="group">👥 Gruppo</option>
+                            <option value="channel">📢 Canale</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Seleziona destinazione</label>
+                        <select name="target_id" required>
+                            <option value="">Prima seleziona il tipo</option>
+                        </select>
+                    </div>
+                `;
+            }}
+        }}
+        
+        let ruleIndex = 1;
+        function addRule() {{
+            const rulesDiv = document.getElementById('extractorRules');
+            const newRule = document.createElement('div');
+            newRule.className = 'rule-row';
+            newRule.setAttribute('data-rule-index', ruleIndex);
+            newRule.innerHTML = `
+                <div class="form-group">
+                    <label>Nome regola</label>
+                    <input type="text" name="rule_name[]" class="form-control" placeholder="es. token_address" required>
+                </div>
+                <div class="form-group">
+                    <label>Testo da cercare</label>
+                    <input type="text" name="search_text[]" class="form-control" placeholder="es. Address: " required>
+                </div>
+                <div class="form-group">
+                    <label>Lunghezza valore da estrarre</label>
+                    <input type="number" name="value_length[]" class="form-control" placeholder="44" min="1" required>
+                </div>
+                <button type="button" class="btn btn-danger btn-sm" onclick="removeRule(${{ruleIndex}})">🗑️ Rimuovi</button>
+            `;
+            rulesDiv.appendChild(newRule);
+            ruleIndex++;
+        }}
+        
+        function removeRule(index) {{
+            const rule = document.querySelector(`[data-rule-index="${{index}}"]`);
+            if (rule) {{
+                rule.remove();
+            }}
+        }}
+        
+        function updateTargetOptions() {{
+            const targetType = document.querySelector('select[name="target_type"]').value;
+            const targetSelect = document.querySelector('select[name="target_id"]');
+            
+            if (!targetType) {{
+                targetSelect.innerHTML = '<option value="">Prima seleziona il tipo</option>';
+                return;
+            }}
+            
+            // Filter chats based on type
+            const filteredChats = availableChats.filter(chat => {{
+                if (targetType === 'user') return chat.type === 'private';
+                if (targetType === 'group') return chat.type === 'group' || chat.type === 'supergroup';
+                if (targetType === 'channel') return chat.type === 'channel';
+                return false;
+            }});
+            
+            targetSelect.innerHTML = `
+                <option value="">Seleziona...</option>
+                ${{filteredChats.map(chat => `
+                    <option value="${{chat.id}}" data-name="${{escapeHtml(chat.title)}}">
+                        ${{escapeHtml(chat.title)}} ${{chat.username ? `(@${{chat.username}})` : ''}}
+                    </option>
+                `).join('')}}
+            `;
+        }}
+        
+        async function createElaboration(event) {{
+            event.preventDefault();
+            
+            const type = document.getElementById('elaborationType').value;
+            let config = {{}};
+            let name = '';
+            
+            if (type === 'extractor') {{
+                // Collect rules
+                const rules = [];
+                const ruleRows = document.querySelectorAll('.rule-row');
+                
+                ruleRows.forEach(row => {{
+                    const ruleName = row.querySelector('input[name="rule_name[]"]').value;
+                    const searchText = row.querySelector('input[name="search_text[]"]').value;
+                    const valueLength = parseInt(row.querySelector('input[name="value_length[]"]').value);
+                    
+                    rules.push({{
+                        rule_name: ruleName,
+                        search_text: searchText,
+                        value_length: valueLength
+                    }});
+                }});
+                
+                config = {{ rules }};
+                name = `Extractor con ${{rules.length}} regole`;
+                
+            }} else if (type === 'redirect') {{
+                const targetType = document.querySelector('select[name="target_type"]').value;
+                const targetSelect = document.querySelector('select[name="target_id"]');
+                const targetId = targetSelect.value;
+                const targetName = targetSelect.selectedOptions[0]?.getAttribute('data-name') || targetId;
+                
+                config = {{
+                    target_type: targetType,
+                    target_id: targetId,
+                    target_name: targetName
+                }};
+                name = `Redirect verso ${{targetName}}`;
+            }}
+            
+            showMessage('Creazione elaborazione...', 'info');
+            
+            try {{
+                const result = await makeRequest(`/api/message-listeners/${{listenerId}}/elaborations`, {{
+                    method: 'POST',
+                    body: JSON.stringify({{
+                        elaboration_type: type,
+                        elaboration_name: name,
+                        config: config
+                    }})
+                }});
+                
+                if (result.success) {{
+                    showMessage('✅ Elaborazione creata con successo!', 'success');
+                    hideNewElaborationForm();
+                    await loadElaborations();
+                }} else {{
+                    showMessage(`❌ Errore: ${{result.error}}`, 'error');
+                }}
+            }} catch (error) {{
+                console.error('Error creating elaboration:', error);
+                showMessage('❌ Errore di connessione', 'error');
+            }}
+        }}
+        
+        async function toggleElaboration(elaborationId, isActive) {{
+            const action = isActive ? 'deactivate' : 'activate';
+            
+            try {{
+                const result = await makeRequest(`/api/elaborations/${{elaborationId}}/${{action}}`, {{
+                    method: 'POST'
+                }});
+                
+                if (result.success) {{
+                    showMessage(`✅ Elaborazione ${{isActive ? 'disattivata' : 'attivata'}} con successo!`, 'success');
+                    await loadElaborations();
+                }} else {{
+                    showMessage(`❌ Errore: ${{result.error}}`, 'error');
+                }}
+            }} catch (error) {{
+                console.error('Error toggling elaboration:', error);
+                showMessage('❌ Errore di connessione', 'error');
+            }}
+        }}
+        
+        async function deleteElaboration(elaborationId) {{
+            if (!confirm('Sei sicuro di voler eliminare questa elaborazione?')) {{
+                return;
+            }}
+            
+            try {{
+                const result = await makeRequest(`/api/elaborations/${{elaborationId}}`, {{
+                    method: 'DELETE'
+                }});
+                
+                if (result.success) {{
+                    showMessage('✅ Elaborazione eliminata con successo!', 'success');
+                    await loadElaborations();
+                }} else {{
+                    showMessage(`❌ Errore: ${{result.error}}`, 'error');
+                }}
+            }} catch (error) {{
+                console.error('Error deleting elaboration:', error);
+                showMessage('❌ Errore di connessione', 'error');
+            }}
+        }}
+        
+        function getElaborationIcon(type) {{
+            switch(type) {{
+                case 'extractor': return '🔍';
+                case 'redirect': return '🔄';
+                default: return '🔧';
+            }}
+        }}
+        
+        function getElaborationTypeLabel(type) {{
+            switch(type) {{
+                case 'extractor': return 'Estrazione dati';
+                case 'redirect': return 'Reindirizzamento';
+                default: return type;
+            }}
+        }}
+        
+        function escapeHtml(text) {{
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }}
+        
+        function showError(message) {{
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('errorContainer').style.display = 'block';
+            document.getElementById('elaborationsContainer').style.display = 'none';
+        }}
+        
+        function showLoading() {{
+            document.querySelector('.loading').style.display = 'block';
+        }}
+        
+        function hideLoading() {{
+            document.querySelector('.loading').style.display = 'none';
+        }}
+        
+        function showMessage(message, type = 'info') {{
+            const statusDiv = document.createElement('div');
+            statusDiv.className = `status ${{type}}`;
+            statusDiv.innerHTML = message;
+            
+            const container = document.querySelector('.content') || document.body;
+            container.insertBefore(statusDiv, container.firstChild);
+            
+            setTimeout(() => statusDiv.remove(), 5000);
+        }}
+    </script>
+    """
+    
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Gestione Elaborazioni",
+        subtitle=f"Listener ID: {listener_id}",
+        content=Markup(content)
+    )
+
+@app.route('/crypto-configurator')
+@require_auth
+def crypto_configurator():
+    """Configuratore regole di estrazione crypto"""
+    
+    # Use unified menu
+    menu_html = get_unified_menu('crypto-configurator')
+    
+    content = f"""
+    {menu_html}
+    
+    <h2>⚙️ Configuratore Regole Estrazione</h2>
+    
+    <div class="card">
+        <h3>Seleziona Gruppo</h3>
+        <div class="form-group">
+            <label for="chatSelect">Gruppo Telegram</label>
+            <select id="chatSelect" class="form-control">
+                <option value="">Seleziona un gruppo...</option>
+            </select>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>Regole di Estrazione</h3>
+        <div id="rulesContainer">
+            <div class="rule-row" id="rule-0">
+                <div class="form-group">
+                    <label>Nome Campo</label>
+                    <input type="text" class="form-control rule-name" placeholder="es. token_address">
+                </div>
+                <div class="form-group">
+                    <label>Testo da Cercare</label>
+                    <input type="text" class="form-control search-text" placeholder="es. Address: ">
+                </div>
+                <div class="form-group">
+                    <label>Lunghezza Valore</label>
+                    <input type="number" class="form-control value-length" placeholder="44" min="1">
+                </div>
+                <button type="button" class="btn btn-danger btn-sm" onclick="removeRule(0)">
+                    🗑️ Rimuovi
+                </button>
+            </div>
+        </div>
+        
+        <button type="button" class="btn btn-success" onclick="addRule()">
+            ➕ Aggiungi Regola
+        </button>
+        
+        <div class="form-actions">
+            <button type="button" class="btn btn-primary" onclick="saveRules()">
+                💾 Salva Configurazione
+            </button>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>Regole Esistenti</h3>
+        <div id="existingRules">
+            <p class="text-muted">Seleziona un gruppo per vedere le regole esistenti</p>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h3>🐳 Stato Container Extractor</h3>
+        <div id="containerStatus">
+            <p class="text-muted">Seleziona un gruppo per vedere lo stato del container</p>
+        </div>
+    </div>
+    
+    <script>
+        const apiBase = window.location.protocol + '//' + window.location.hostname + ':' + window.location.port;
+        let ruleCounter = 1;
+        
+        document.addEventListener('DOMContentLoaded', function() {{
+            loadUserChats();
+        }});
+        
+        function loadUserChats() {{
+            const token = localStorage.getItem('access_token') || localStorage.getItem('session_token');
+            
+            fetch('/api/telegram/get-chats', {{
+                method: 'GET',
+                headers: {{
+                    'Authorization': 'Bearer ' + token
+                }}
+            }})
+            .then(response => response.json())
+            .then(data => {{
+                if (data.success) {{
+                    const select = document.getElementById('chatSelect');
+                    select.innerHTML = '<option value="">Seleziona un gruppo...</option>';
+                    
+                    data.chats.forEach(chat => {{
+                        select.innerHTML += `<option value="${{chat.chat_id || chat.id}}">${{chat.title}}</option>`;
+                    }});
+                    
+                    select.addEventListener('change', function() {{
+                        loadExistingRules();
+                        loadContainerStatus();
+                    }});
+                }}
+            }})
+            .catch(error => console.error('Error loading chats:', error));
+        }}
+        
+        function loadContainerStatus() {{
+            const chatId = document.getElementById('chatSelect').value;
+            if (!chatId) {{
+                document.getElementById('containerStatus').innerHTML = '<p class="text-muted">Seleziona un gruppo per vedere lo stato del container</p>';
+                return;
+            }}
+            
+            const token = localStorage.getItem('access_token') || localStorage.getItem('session_token');
+            
+            fetch(apiBase + '/api/crypto/extractors/' + chatId + '/status', {{
+                method: 'GET',
+                headers: {{
+                    'Authorization': 'Bearer ' + token
+                }}
+            }})
+            .then(response => response.json())
+            .then(data => {{
+                if (data.success) {{
+                    displayContainerStatus(data);
+                }}
+            }})
+            .catch(error => console.error('Error loading container status:', error));
+        }}
+        
+        function displayContainerStatus(data) {{
+            const container = document.getElementById('containerStatus');
+            
+            if (data.status === 'not_configured' || data.status === 'not_created') {{
+                container.innerHTML = `
+                    <div class="status warning">
+                        <p>⚠️ ${{data.message}}</p>
+                    </div>
+                `;
+                return;
+            }}
+            
+            const statusColor = data.running ? '#28a745' : '#dc3545';
+            const statusText = data.running ? 'In esecuzione' : 'Fermato';
+            const statusIcon = data.running ? '✅' : '❌';
+            
+            container.innerHTML = `
+                <div style="padding: 20px;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                        <div>
+                            <h4 style="margin: 0; color: ${{statusColor}};">
+                                ${{statusIcon}} ${{statusText}}
+                            </h4>
+                            <p style="margin: 5px 0; color: #666; font-size: 12px;">
+                                Container: ${{data.container_name}}
+                            </p>
+                        </div>
+                        <div>
+                            ${{data.running ? `
+                                <button class="btn btn-warning btn-sm" onclick="restartExtractor()">
+                                    🔄 Riavvia
+                                </button>
+                                <button class="btn btn-danger btn-sm" onclick="stopExtractor()">
+                                    ⏹️ Ferma
+                                </button>
+                            ` : `
+                                <button class="btn btn-success btn-sm" onclick="startExtractor()">
+                                    ▶️ Avvia
+                                </button>
+                            `}}
+                        </div>
+                    </div>
+                    
+                    ${{data.running ? `
+                        <div class="grid" style="grid-template-columns: repeat(3, 1fr); gap: 15px;">
+                            <div style="text-align: center;">
+                                <p style="margin: 0; font-size: 24px; font-weight: bold;">
+                                    ${{data.message_count || 0}}
+                                </p>
+                                <p style="margin: 0; color: #666; font-size: 12px;">
+                                    Messaggi processati
+                                </p>
+                            </div>
+                            <div style="text-align: center;">
+                                <p style="margin: 0; font-size: 24px; font-weight: bold;">
+                                    ${{data.memory_usage_mb || 0}} MB
+                                </p>
+                                <p style="margin: 0; color: #666; font-size: 12px;">
+                                    Memoria utilizzata
+                                </p>
+                            </div>
+                            <div style="text-align: center;">
+                                <p style="margin: 0; font-size: 24px; font-weight: bold;">
+                                    ${{data.cpu_percent || 0}}%
+                                </p>
+                                <p style="margin: 0; color: #666; font-size: 12px;">
+                                    CPU utilizzata
+                                </p>
+                            </div>
+                        </div>
+                    ` : ''}}
+                </div>
+            `;
+        }}
+        
+        function restartExtractor() {{
+            const chatId = document.getElementById('chatSelect').value;
+            if (!chatId) return;
+            
+            if (!confirm('Sei sicuro di voler riavviare l\\'extractor?')) return;
+            
+            const token = localStorage.getItem('access_token') || localStorage.getItem('session_token');
+            
+            fetch(apiBase + '/api/crypto/extractors/' + chatId + '/restart', {{
+                method: 'POST',
+                headers: {{
+                    'Authorization': 'Bearer ' + token
+                }}
+            }})
+            .then(response => response.json())
+            .then(data => {{
+                if (data.success) {{
+                    alert('Extractor riavviato con successo!');
+                    loadContainerStatus();
+                }} else {{
+                    alert('Errore: ' + (data.error || 'Errore sconosciuto'));
+                }}
+            }})
+            .catch(error => {{
+                console.error('Error restarting extractor:', error);
+                alert('Errore nel riavvio');
+            }});
+        }}
+        
+        function stopExtractor() {{
+            const chatId = document.getElementById('chatSelect').value;
+            if (!chatId) return;
+            
+            if (!confirm('Sei sicuro di voler fermare l\\'extractor? Dovrai ricreare le regole per riavviarlo.')) return;
+            
+            const token = localStorage.getItem('access_token') || localStorage.getItem('session_token');
+            
+            fetch(apiBase + '/api/crypto/extractors/' + chatId + '/stop', {{
+                method: 'POST',
+                headers: {{
+                    'Authorization': 'Bearer ' + token
+                }}
+            }})
+            .then(response => response.json())
+            .then(data => {{
+                if (data.success) {{
+                    alert('Extractor fermato con successo!');
+                    loadContainerStatus();
+                }} else {{
+                    alert('Errore: ' + (data.error || 'Errore sconosciuto'));
+                }}
+            }})
+            .catch(error => {{
+                console.error('Error stopping extractor:', error);
+                alert('Errore nell\\'arresto');
+            }});
+        }}
+        
+        function startExtractor() {{
+            alert('Per avviare l\\'extractor, ricrea le regole e salva la configurazione.');
+        }}
+        
+        function addRule() {{
+            const container = document.getElementById('rulesContainer');
+            const newRule = document.createElement('div');
+            newRule.className = 'rule-row';
+            newRule.id = `rule-${{ruleCounter}}`;
+            newRule.innerHTML = `
+                <div class="form-group">
+                    <label>Nome Campo</label>
+                    <input type="text" class="form-control rule-name" placeholder="es. trade_score">
+                </div>
+                <div class="form-group">
+                    <label>Testo da Cercare</label>
+                    <input type="text" class="form-control search-text" placeholder="es. TradeScore: ">
+                </div>
+                <div class="form-group">
+                    <label>Lunghezza Valore</label>
+                    <input type="number" class="form-control value-length" placeholder="2" min="1">
+                </div>
+                <button type="button" class="btn btn-danger btn-sm" onclick="removeRule(${{ruleCounter}})">
+                    🗑️ Rimuovi
+                </button>
+            `;
+            container.appendChild(newRule);
+            ruleCounter++;
+        }}
+        
+        function removeRule(id) {{
+            const rule = document.getElementById(`rule-${{id}}`);
+            if (rule) rule.remove();
+        }}
+        
+        function saveRules() {{
+            alert('Funzione saveRules chiamata!');
+            
+            const token = localStorage.getItem('access_token') || localStorage.getItem('session_token');
+            
+            fetch(apiBase + '/api/debug/log', {{
+                method: 'POST',
+                headers: {{
+                    'Authorization': 'Bearer ' + token,
+                    'Content-Type': 'application/json'
+                }},
+                body: JSON.stringify({{
+                    message: "SAVE RULES FUNCTION CALLED",
+                    data: {{ timestamp: new Date().toISOString() }}
+                }})
+            }});
+            
+            const chatId = document.getElementById('chatSelect').value;
+            
+            if (!chatId) {{
+                alert('Seleziona un gruppo');
+                return;
+            }}
+            
+            const chatSelect = document.getElementById('chatSelect');
+            const selectedOption = chatSelect.options[chatSelect.selectedIndex];
+            const chatTitle = selectedOption.text;
+            
+            const rules = [];
+            document.querySelectorAll('.rule-row').forEach(row => {{
+                const name = row.querySelector('.rule-name').value;
+                const search = row.querySelector('.search-text').value;
+                const length = row.querySelector('.value-length').value;
+                
+                if (name && search && length) {{
+                    rules.push({{
+                        rule_name: name,
+                        search_text: search,
+                        value_length: parseInt(length)
+                    }});
+                }}
+            }});
+            
+            if (rules.length === 0) {{
+                alert('Aggiungi almeno una regola valida');
+                return;
+            }}
+            
+            const requestData = {{
+                source_chat_id: chatId,
+                source_chat_title: chatTitle,
+                rules: rules
+            }};
+            
+            fetch(apiBase + '/api/debug/log', {{
+                method: 'POST',
+                headers: {{
+                    'Authorization': 'Bearer ' + token,
+                    'Content-Type': 'application/json'
+                }},
+                body: JSON.stringify({{
+                    message: "SAVE RULES ATTEMPT",
+                    data: {{
+                        chatId: chatId,
+                        chatTitle: chatTitle,
+                        rulesCount: rules.length,
+                        hasToken: !!token
+                    }}
+                }})
+            }});
+            
+            fetch(apiBase + '/api/crypto/rules', {{
+                method: 'POST',
+                headers: {{
+                    'Authorization': 'Bearer ' + token,
+                    'Content-Type': 'application/json'
+                }},
+                body: JSON.stringify(requestData)
+            }})
+            .then(response => {{
+                fetch(apiBase + '/api/debug/log', {{
+                    method: 'POST',
+                    headers: {{
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json'
+                    }},
+                    body: JSON.stringify({{
+                        message: "SAVE RULES RESPONSE STATUS",
+                        data: {{ status: response.status }}
+                    }})
+                }});
+                return response.json();
+            }})
+            .then(data => {{
+                fetch(apiBase + '/api/debug/log', {{
+                    method: 'POST',
+                    headers: {{
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json'
+                    }},
+                    body: JSON.stringify({{
+                        message: "SAVE RULES RESPONSE DATA",
+                        data: data
+                    }})
+                }});
+                
+                if (data.code_sent) {{
+                    // Telegram code requested - show prompt
+                    const code = prompt('Inserisci il codice di verifica ricevuto su Telegram:');
+                    if (code) {{
+                        // Resend with code
+                        const dataWithCode = {{
+                            source_chat_id: chatId,
+                            source_chat_title: chatTitle,
+                            rules: rules,
+                            code: code
+                        }};
+                        
+                        fetch(apiBase + '/api/crypto/rules', {{
+                            method: 'POST',
+                            headers: {{
+                                'Authorization': 'Bearer ' + token,
+                                'Content-Type': 'application/json'
+                            }},
+                            body: JSON.stringify(dataWithCode)
+                        }})
+                        .then(response => response.json())
+                        .then(data => {{
+                            if (data.success) {{
+                                alert('Regole salvate con successo! Container extractor avviato: ' + (data.container_name || 'N/A'));
+                                loadExistingRules();
+                                loadContainerStatus();
+                            }} else {{
+                                alert('Errore nel salvataggio: ' + (data.error || 'Errore sconosciuto'));
+                            }}
+                        }})
+                        .catch(error => {{
+                            alert('Errore nella verifica del codice: ' + error.message);
+                        }});
+                    }}
+                }} else if (data.success) {{
+                    alert('Regole salvate con successo! Container extractor avviato: ' + (data.container_name || 'N/A'));
+                    loadExistingRules();
+                    loadContainerStatus();
+                }} else {{
+                    alert('Errore nel salvataggio: ' + (data.error || 'Errore sconosciuto'));
+                }}
+            }})
+            .catch(error => {{
+                fetch(apiBase + '/api/debug/log', {{
+                    method: 'POST',
+                    headers: {{
+                        'Authorization': 'Bearer ' + token,
+                        'Content-Type': 'application/json'
+                    }},
+                    body: JSON.stringify({{
+                        message: "SAVE RULES ERROR",
+                        data: {{ error: error.toString() }}
+                    }})
+                }});
+                console.error('Error saving rules:', error);
+                alert('Errore nel salvataggio delle regole: ' + error.message + '. Verifica la connessione al server.');
+            }});
+        }}
+        
+        function loadExistingRules() {{
+            const chatId = document.getElementById('chatSelect').value;
+            if (!chatId) {{
+                document.getElementById('existingRules').innerHTML = '<p class="text-muted">Seleziona un gruppo per vedere le regole esistenti</p>';
+                return;
+            }}
+            
+            const token = localStorage.getItem('access_token') || localStorage.getItem('session_token');
+            
+            fetch(apiBase + '/api/crypto/rules?chat_id=' + chatId, {{
+                method: 'GET',
+                headers: {{
+                    'Authorization': 'Bearer ' + token
+                }}
+            }})
+            .then(response => response.json())
+            .then(data => {{
+                if (data.success) {{
+                    displayExistingRules(data.rules);
+                }}
+            }})
+            .catch(error => console.error('Error loading rules:', error));
+        }}
+        
+        function displayExistingRules(rules) {{
+            const container = document.getElementById('existingRules');
+            
+            if (rules.length === 0) {{
+                container.innerHTML = '<p class="text-muted">Nessuna regola configurata per questo gruppo</p>';
+                return;
+            }}
+            
+            let html = '<div class="grid">';
+            rules.forEach(rule => {{
+                html += `
+                    <div class="card">
+                        <h4>${{rule.rule_name}}</h4>
+                        <p><strong>Cerca:</strong> "${{rule.search_text}}"</p>
+                        <p><strong>Lunghezza:</strong> ${{rule.value_length}} caratteri</p>
+                        <button class="btn btn-danger btn-sm" onclick="deleteRule(${{rule.id}})">
+                            🗑️ Elimina
+                        </button>
+                    </div>
+                `;
+            }});
+            html += '</div>';
+            
+            container.innerHTML = html;
+        }}
+        
+        function deleteRule(ruleId) {{
+            if (!confirm('Sei sicuro di voler eliminare questa regola?')) return;
+            
+            const token = localStorage.getItem('access_token') || localStorage.getItem('session_token');
+            
+            fetch(apiBase + '/api/crypto/rules/' + ruleId, {{
+                method: 'DELETE',
+                headers: {{
+                    'Authorization': 'Bearer ' + token
+                }}
+            }})
+            .then(response => response.json())
+            .then(data => {{
+                if (data.success) {{
+                    alert('Regola eliminata con successo!');
+                    loadExistingRules();
+                }} else {{
+                    alert('Errore: ' + (data.error || 'Errore sconosciuto'));
+                }}
+            }})
+            .catch(error => {{
+                console.error('Error deleting rule:', error);
+                alert('Errore nell\\'eliminazione');
+            }});
+        }}
+    </script>
+    
+    <style>
+        .rule-row {{
+            border: 1px solid #e9ecef;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            background: #f8f9fa;
+        }}
+        
+        .rule-row .form-group {{
+            display: inline-block;
+            width: 30%;
+            margin-right: 2%;
+            vertical-align: top;
+        }}
+        
+        .rule-row button {{
+            margin-top: 25px;
+        }}
+    </style>
+    """
+    
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Configuratore Crypto",
+        subtitle="Configura regole di estrazione dati",
+        content=Markup(content)
+    )
+
+# Message Listeners API Proxy Routes
+@app.route('/api/message-listeners', methods=['GET'])
+def api_get_message_listeners():
+    """Proxy per recupero message listeners"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    result = call_backend('/api/message-listeners', 'GET', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/message-listeners', methods=['POST'])
+def api_create_message_listener():
+    """Proxy per creazione message listener"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    data = request.get_json()
+    result = call_backend('/api/message-listeners', 'POST', data, auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/message-listeners/<int:listener_id>/start', methods=['POST'])
+def api_start_message_listener(listener_id):
+    """Proxy per avvio message listener"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    result = call_backend(f'/api/message-listeners/{listener_id}/start', 'POST', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/message-listeners/<int:listener_id>/stop', methods=['POST'])
+def api_stop_message_listener(listener_id):
+    """Proxy per stop message listener"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    result = call_backend(f'/api/message-listeners/{listener_id}/stop', 'POST', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/message-listeners/<int:listener_id>', methods=['DELETE'])
+def api_delete_message_listener(listener_id):
+    """Proxy per eliminazione message listener"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    result = call_backend(f'/api/message-listeners/{listener_id}', 'DELETE', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/message-listeners/<int:listener_id>/elaborations', methods=['GET'])
+def api_get_elaborations(listener_id):
+    """Proxy per recupero elaborazioni"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    result = call_backend(f'/api/message-listeners/{listener_id}/elaborations', 'GET', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/message-listeners/<int:listener_id>/elaborations', methods=['POST'])
+def api_create_elaboration(listener_id):
+    """Proxy per creazione elaborazione"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    data = request.get_json()
+    result = call_backend(f'/api/message-listeners/{listener_id}/elaborations', 'POST', data, auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/elaborations/<int:elaboration_id>/activate', methods=['POST'])
+def api_activate_elaboration(elaboration_id):
+    """Proxy per attivazione elaborazione"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    result = call_backend(f'/api/elaborations/{elaboration_id}/activate', 'POST', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/elaborations/<int:elaboration_id>/deactivate', methods=['POST'])
+def api_deactivate_elaboration(elaboration_id):
+    """Proxy per disattivazione elaborazione"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    result = call_backend(f'/api/elaborations/{elaboration_id}/deactivate', 'POST', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/elaborations/<int:elaboration_id>', methods=['DELETE'])
+def api_delete_elaboration(elaboration_id):
+    """Proxy per eliminazione elaborazione"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    result = call_backend(f'/api/elaborations/{elaboration_id}', 'DELETE', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/debug/log', methods=['POST'])
+def proxy_debug_log():
+    """Proxy debug log to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    data = request.get_json()
+    
+    response = call_backend('/api/debug/log', 'POST', data, token)
+    if response:
+        return jsonify(response), 200
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/crypto/rules', methods=['GET', 'POST'])
+def proxy_crypto_rules():
+    """Proxy crypto rules to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    
+    if request.method == 'GET':
+        chat_id = request.args.get('chat_id')
+        response = call_backend(f'/api/crypto/rules?chat_id={chat_id}', 'GET', None, token)
+    else:
+        data = request.get_json()
+        response = call_backend('/api/crypto/rules', 'POST', data, token)
+    
+    if response:
+        return jsonify(response), 200
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/crypto/extractors/<source_chat_id>/status', methods=['GET'])
+def proxy_extractor_status(source_chat_id):
+    """Proxy extractor status to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    response = call_backend(f'/api/crypto/extractors/{source_chat_id}/status', 'GET', None, token)
+    
+    if response:
+        return jsonify(response), 200
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/crypto/extractors/<source_chat_id>/restart', methods=['POST'])
+def proxy_extractor_restart(source_chat_id):
+    """Proxy extractor restart to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    response = call_backend(f'/api/crypto/extractors/{source_chat_id}/restart', 'POST', None, token)
+    
+    if response:
+        return jsonify(response), 200
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/crypto/extractors/<source_chat_id>/stop', methods=['POST'])
+def proxy_extractor_stop(source_chat_id):
+    """Proxy extractor stop to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    response = call_backend(f'/api/crypto/extractors/{source_chat_id}/stop', 'POST', None, token)
+    
+    if response:
+        return jsonify(response), 200
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/crypto/rules/<rule_id>', methods=['DELETE'])
+def proxy_delete_crypto_rule(rule_id):
+    """Proxy delete crypto rule to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    response = call_backend(f'/api/crypto/rules/{rule_id}', 'DELETE', None, token)
+    
+    if response:
+        return jsonify(response), 200
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
 
 if __name__ == '__main__':
     logger.info("🌐 Starting Telegram Chat Manager Frontend")

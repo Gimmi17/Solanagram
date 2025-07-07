@@ -34,6 +34,7 @@ from telethon.sessions import StringSession
 
 # Import forwarder manager
 from forwarder_manager import ForwarderManager
+from message_listener_manager import MessageListenerManager
 
 # Logging Configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -295,6 +296,29 @@ async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string
         else:
             # Normal file-based session
             session_file = os.path.join(SESSION_DIR, f"user_{hash_phone_number(phone)}.session")
+            
+            # Check if session file is locked and remove if necessary
+            if os.path.exists(session_file):
+                try:
+                    # Test if session can be opened without issues
+                    test_client = TelegramClient(session_file + "_test", api_id, api_hash)
+                    await test_client.connect()
+                    await test_client.disconnect()
+                    # Remove test session
+                    test_session = session_file + "_test.session"
+                    if os.path.exists(test_session):
+                        os.remove(test_session)
+                except Exception as e:
+                    logger.warning(f"Session file {session_file} appears corrupted: {e}. Removing...")
+                    # Remove corrupted session files
+                    for f in [session_file, session_file + "-journal", session_file + "-wal", session_file + "-shm"]:
+                        try:
+                            if os.path.exists(f):
+                                os.remove(f)
+                                logger.info(f"Removed corrupted session file: {f}")
+                        except Exception as remove_e:
+                            logger.warning(f"Could not remove {f}: {remove_e}")
+            
             client = TelegramClient(session_file, api_id, api_hash)
         
         # Connect with timeout to avoid hanging
@@ -2300,6 +2324,1369 @@ def clear_cached_code():
         "success": True,
         "message": f"Codice in cache cancellato per {phone}"
     })
+
+# ============================================
+# Crypto Signal Processing Endpoints
+# ============================================
+
+@app.route('/api/crypto/processors', methods=['GET'])
+@jwt_required()
+def get_crypto_processors():
+    """Get all crypto processors for current user"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        from crypto.processor import CryptoSignalProcessor
+        processor = CryptoSignalProcessor(db)
+        
+        processors = processor.get_all_processors(current_user_id)
+        
+        return jsonify({
+            "success": True,
+            "processors": processors
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting crypto processors: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/processors', methods=['POST'])
+@jwt_required()
+def create_crypto_processor():
+    """Create or update a crypto processor for a chat"""
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    if not data.get('source_chat_id'):
+        return jsonify({"success": False, "error": "source_chat_id richiesto"}), 400
+    
+    db = get_db_connection()
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        from crypto.processor import CryptoSignalProcessor
+        processor = CryptoSignalProcessor(db)
+        
+        config = data.get('config', {})
+        processor_name = data.get('processor_name', 'Crypto Signal Parser')
+        
+        success = processor.save_processor_config(
+            current_user_id,
+            data['source_chat_id'],
+            processor_name,
+            config
+        )
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Processore crypto configurato con successo"
+            }), 201
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Errore nel salvataggio della configurazione"
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error creating crypto processor: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/test-parse', methods=['POST'])
+@jwt_required()
+def test_crypto_parse():
+    """Test parsing a crypto signal message"""
+    data = request.get_json()
+    
+    if not data.get('message'):
+        return jsonify({"success": False, "error": "Messaggio richiesto"}), 400
+    
+    try:
+        from crypto.parser import CryptoSignalParser
+        parser = CryptoSignalParser()
+        
+        result = parser.parse_signal(data['message'])
+        summary = parser.format_signal_summary(result)
+        
+        return jsonify({
+            "success": True,
+            "parsed_data": result,
+            "summary": summary
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error testing crypto parse: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/signals/<source_chat_id>', methods=['GET'])
+@jwt_required()
+def get_crypto_signals(source_chat_id):
+    """Get crypto signals for a specific chat"""
+    current_user_id = get_jwt_identity()
+    hours = request.args.get('hours', 24, type=int)
+    signal_type = request.args.get('type')
+    
+    db = get_db_connection()
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        from crypto.processor import CryptoSignalProcessor
+        processor = CryptoSignalProcessor(db)
+        
+        signals = processor.get_signals_by_chat(current_user_id, int(source_chat_id), hours, signal_type)
+        
+        return jsonify({
+            "success": True,
+            "signals": signals,
+            "count": len(signals)
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting crypto signals: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/top-performers', methods=['GET'])
+@jwt_required()
+def get_top_performers():
+    """Get top performing crypto tokens"""
+    current_user_id = get_jwt_identity()
+    limit = request.args.get('limit', 10, type=int)
+    
+    db = get_db_connection()
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        from crypto.processor import CryptoSignalProcessor
+        processor = CryptoSignalProcessor(db)
+        
+        top_performers = processor.get_top_performers(current_user_id, limit)
+        
+        return jsonify({
+            "success": True,
+            "performers": top_performers
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting top performers: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/process-message', methods=['POST'])
+@jwt_required()
+def process_crypto_message():
+    """Manually process a crypto signal message"""
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    required_fields = ['source_chat_id', 'message']
+    for field in required_fields:
+        if field not in data:
+            return jsonify({"success": False, "error": f"{field} richiesto"}), 400
+    
+    db = get_db_connection()
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        from crypto.processor import CryptoSignalProcessor
+        processor = CryptoSignalProcessor(db)
+        
+        result = processor.process_message(
+            current_user_id,
+            data['source_chat_id'],
+            data['message']
+        )
+        
+        if result['success']:
+            return jsonify(result), 201
+        else:
+            return jsonify(result), 400
+            
+    except Exception as e:
+        logger.error(f"Error processing crypto message: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/processors/<int:processor_id>', methods=['DELETE'])
+@jwt_required()
+def delete_crypto_processor(processor_id):
+    """Delete a crypto processor"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        from crypto.processor import CryptoSignalProcessor
+        processor = CryptoSignalProcessor(db)
+        
+        success = processor.delete_processor(current_user_id, processor_id)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Processore eliminato con successo"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": "Processore non trovato o non autorizzato"
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error deleting crypto processor: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/rules', methods=['GET', 'POST'])
+@jwt_required()
+def manage_crypto_rules():
+    """Manage crypto extraction rules"""
+    current_user_id = get_jwt_identity()
+    logger.info(f"=== CRYPTO RULES ENDPOINT CALLED ===")
+    logger.info(f"Method: {request.method}")
+    logger.info(f"User ID: {current_user_id}")
+    logger.info(f"Request URL: {request.url}")
+    logger.info(f"Request headers: {dict(request.headers)}")
+    
+    db = get_db_connection()
+    if not db:
+        logger.error("Database connection failed")
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        if request.method == 'GET':
+            logger.info("GET request - fetching rules")
+            chat_id = request.args.get('chat_id')
+            logger.info(f"Chat ID from args: {chat_id}")
+            
+            if not chat_id:
+                logger.error("No chat_id provided")
+                return jsonify({"success": False, "error": "chat_id richiesto"}), 400
+            
+            with db.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute("""
+                    SELECT * FROM extraction_rules
+                    WHERE user_id = %s AND source_chat_id = %s
+                    ORDER BY created_at DESC
+                """, (current_user_id, chat_id))
+                rules = cursor.fetchall()
+            
+            logger.info(f"Found {len(rules)} rules for user {current_user_id}, chat {chat_id}")
+            return jsonify({
+                "success": True,
+                "rules": rules
+            }), 200
+        
+        elif request.method == 'POST':
+            logger.info("POST request - saving rules")
+            
+            # Check if request has JSON content
+            if not request.is_json:
+                logger.error("Request is not JSON")
+                return jsonify({"success": False, "error": "Content-Type must be application/json"}), 400
+            
+            data = request.get_json()
+            logger.info(f"Request data: {data}")
+            
+            source_chat_id = data.get('source_chat_id')
+            rules = data.get('rules', [])
+            
+            logger.info(f"Source chat ID: {source_chat_id}")
+            logger.info(f"Rules count: {len(rules)}")
+            logger.info(f"Rules: {rules}")
+            
+            if not source_chat_id or not rules:
+                logger.error(f"Missing required data: source_chat_id={source_chat_id}, rules={rules}")
+                return jsonify({"success": False, "error": "source_chat_id e rules richiesti"}), 400
+            
+            # Get chat title
+            source_chat_title = data.get('source_chat_title', '')
+            if not source_chat_title:
+                source_chat_title = f"Group_{source_chat_id}"
+            
+            logger.info(f"Chat title: {source_chat_title}")
+            
+            # Delete existing rules for this chat
+            with db.cursor() as cursor:
+                cursor.execute("""
+                    DELETE FROM extraction_rules
+                    WHERE user_id = %s AND source_chat_id = %s
+                """, (current_user_id, source_chat_id))
+                deleted_count = cursor.rowcount
+                logger.info(f"Deleted {deleted_count} existing rules")
+                
+                # Insert new rules
+                for i, rule in enumerate(rules):
+                    logger.info(f"Inserting rule {i+1}: {rule}")
+                    cursor.execute("""
+                        INSERT INTO extraction_rules (user_id, source_chat_id, rule_name, search_text, value_length)
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (
+                        current_user_id,
+                        source_chat_id,
+                        rule['rule_name'],
+                        rule['search_text'],
+                        rule['value_length']
+                    ))
+                
+                db.commit()
+                logger.info(f"Successfully saved {len(rules)} rules to database")
+            
+            # ---- Avvio container estrattore crypto ----
+            container_name = None
+            try:
+                logger.info("Starting extractor container creation")
+                
+                # Get user info
+                with db.cursor(cursor_factory=RealDictCursor) as cursor:
+                    cursor.execute("SELECT phone, api_id, api_hash_encrypted FROM users WHERE id = %s", (current_user_id,))
+                    user = cursor.fetchone()
+                
+                if not user:
+                    logger.error(f"User not found for id {current_user_id}")
+                    return jsonify({"success": False, "error": "User not found"}), 404
+                
+                # Check if user sent a code
+                code_from_client = data.get('code')
+                
+                # Create session name for this extractor
+                session_name = f"extractor_{hash_phone_number(user['phone'])}_{source_chat_id}"
+                session_file = os.path.join(SESSION_DIR, f"{session_name}.session")
+                
+                # Check if session already exists and is valid
+                session_exists_and_valid = False
+                if os.path.exists(session_file):
+                    try:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        
+                        async def _check_session():
+                            client = TelegramClient(session_file, user['api_id'], decrypt_api_hash(user['api_hash_encrypted']))
+                            await client.connect()
+                            authorized = await client.is_user_authorized()
+                            await client.disconnect()
+                            return authorized
+                        
+                        session_exists_and_valid = loop.run_until_complete(_check_session())
+                        loop.close()
+                        logger.info(f"Session check for {session_name}: {'valid' if session_exists_and_valid else 'invalid'}")
+                    except Exception as e:
+                        logger.error(f"Error checking session: {e}")
+                        session_exists_and_valid = False
+                
+                # If session is valid, proceed with container creation
+                if session_exists_and_valid:
+                    logger.info(f"Using existing valid session for {session_name}")
+                    
+                    from crypto.extractor_manager import ExtractorManager
+                    extractor_mgr = ExtractorManager()
+                    
+                    ok, container_name, msg = extractor_mgr.create_extractor_container(
+                        user_id=current_user_id,
+                        source_chat_id=source_chat_id,
+                        source_chat_title=source_chat_title,
+                        rules=rules,
+                        db_url=os.getenv('DATABASE_URL', ''),
+                        api_id=user['api_id'],
+                        api_hash=decrypt_api_hash(user['api_hash_encrypted']),
+                        session_string='',  # We use file session
+                        session_file_path=session_file
+                    )
+                    logger.info(f"Extractor container result: {ok}, {container_name}, {msg}")
+                    
+                    if ok and container_name:
+                        # Save container info
+                        with db.cursor() as cursor:
+                            cursor.execute("""
+                                INSERT INTO crypto_processors (user_id, source_chat_id, processor_name, is_active, config)
+                                VALUES (%s, %s, %s, %s, %s)
+                                ON CONFLICT (user_id, source_chat_id) 
+                                DO UPDATE SET 
+                                    processor_name = EXCLUDED.processor_name,
+                                    is_active = EXCLUDED.is_active,
+                                    config = EXCLUDED.config,
+                                    updated_at = CURRENT_TIMESTAMP
+                            """, (
+                                current_user_id,
+                                source_chat_id,
+                                f"Extractor: {source_chat_title}",
+                                True,
+                                json.dumps({
+                                    "container_name": container_name,
+                                    "rules": rules,
+                                    "source_chat_title": source_chat_title
+                                })
+                            ))
+                            db.commit()
+                else:
+                    # Need to create session - handle code flow
+                    verification_key = f"extractor_verification:{current_user_id}:{source_chat_id}"
+                    redis_conn = get_redis_connection()
+                    
+                    if not code_from_client:
+                        # Send code
+                        logger.info("No code provided, sending verification code")
+                        
+                        # Check rate limiting
+                        rate_check = can_request_sms_code(user['phone'])
+                        if not rate_check["can_request"]:
+                            return jsonify({
+                                "success": False,
+                                "error": f"Limite SMS raggiunto. Riprova tra {rate_check['time_formatted']}",
+                                "rate_limit": rate_check
+                            }), 429
+                        
+                        try:
+                            async def _send_code():
+                                if os.path.exists(session_file):
+                                    os.remove(session_file)
+                                    logger.info(f"Removed existing session file for {session_name}")
+                                
+                                client = TelegramClient(session_file, user['api_id'], decrypt_api_hash(user['api_hash_encrypted']))
+                                await client.connect()
+                                result = await client.send_code_request(user['phone'])
+                                
+                                if redis_conn:
+                                    verification_data = {
+                                        "phone_code_hash": result.phone_code_hash,
+                                        "session_name": session_name,
+                                        "api_id": user['api_id'],
+                                        "api_hash": user['api_hash_encrypted'],
+                                        "rules": rules,
+                                        "source_chat_title": source_chat_title
+                                    }
+                                    redis_conn.set(verification_key, json.dumps(verification_data), ex=600)
+                                await client.disconnect()
+                            
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            loop.run_until_complete(_send_code())
+                            loop.close()
+                            
+                            # Increment counter
+                            counter_status = increment_sms_code_counter(user['phone'])
+                            
+                            return jsonify({
+                                "success": True,
+                                "code_sent": True,
+                                "message": f"Codice di verifica inviato a {user['phone']}",
+                                "phone": user['phone'],
+                                "rate_limit": counter_status,
+                                "rules_saved": len(rules)
+                            }), 200
+                            
+                        except errors.FloodWaitError as e:
+                            sync_flood_wait_from_telegram(user['phone'], e.seconds)
+                            return jsonify({
+                                "success": False,
+                                "error": f"Troppi tentativi. Riprova tra {e.seconds} secondi",
+                                "flood_wait": e.seconds
+                            }), 429
+                        except Exception as e:
+                            logger.error(f"Error sending code: {e}")
+                            return jsonify({"success": False, "error": str(e)}), 500
+                    
+                    else:
+                        # Verify code
+                        logger.info("Code provided, verifying")
+                        
+                        if not redis_conn or not redis_conn.exists(verification_key):
+                            return jsonify({"success": False, "error": "Richiesta di verifica scaduta"}), 400
+                        
+                        try:
+                            verification_data = json.loads(redis_conn.get(verification_key))
+                            
+                            async def _verify_code():
+                                client = TelegramClient(session_file, verification_data['api_id'], decrypt_api_hash(verification_data['api_hash']))
+                                await client.connect()
+                                await client.sign_in(user['phone'], code_from_client, phone_code_hash=verification_data['phone_code_hash'])
+                                authorized = await client.is_user_authorized()
+                                await client.disconnect()
+                                return authorized
+                            
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            ok = loop.run_until_complete(_verify_code())
+                            loop.close()
+                            
+                            if not ok:
+                                return jsonify({"success": False, "error": "Codice non valido"}), 400
+                            
+                            # Code verified, create container
+                            redis_conn.delete(verification_key)
+                            logger.info(f"Extractor session created for {session_name}")
+                            
+                            from crypto.extractor_manager import ExtractorManager
+                            extractor_mgr = ExtractorManager()
+                            
+                            ok, container_name, msg = extractor_mgr.create_extractor_container(
+                                user_id=current_user_id,
+                                source_chat_id=source_chat_id,
+                                source_chat_title=verification_data['source_chat_title'],
+                                rules=verification_data['rules'],
+                                db_url=os.getenv('DATABASE_URL', ''),
+                                api_id=verification_data['api_id'],
+                                api_hash=decrypt_api_hash(verification_data['api_hash']),
+                                session_string='',  # We use file session
+                                session_file_path=session_file
+                            )
+                            
+                            if ok and container_name:
+                                # Save container info
+                                with db.cursor() as cursor:
+                                    cursor.execute("""
+                                        INSERT INTO crypto_processors (user_id, source_chat_id, processor_name, is_active, config)
+                                        VALUES (%s, %s, %s, %s, %s)
+                                        ON CONFLICT (user_id, source_chat_id) 
+                                        DO UPDATE SET 
+                                            processor_name = EXCLUDED.processor_name,
+                                            is_active = EXCLUDED.is_active,
+                                            config = EXCLUDED.config,
+                                            updated_at = CURRENT_TIMESTAMP
+                                    """, (
+                                        current_user_id,
+                                        source_chat_id,
+                                        f"Extractor: {verification_data['source_chat_title']}",
+                                        True,
+                                        json.dumps({
+                                            "container_name": container_name,
+                                            "rules": verification_data['rules'],
+                                            "source_chat_title": verification_data['source_chat_title']
+                                        })
+                                    ))
+                                    db.commit()
+                                    
+                        except Exception as e:
+                            logger.error(f"Error verifying code: {e}")
+                            return jsonify({"success": False, "error": str(e)}), 500
+
+            except Exception as e:
+                logger.error(f"Failed to start extractor container: {e}")
+                import traceback
+                logger.error(f"Extractor error traceback: {traceback.format_exc()}")
+
+            logger.info(f"Returning success response with {len(rules)} rules saved")
+            return jsonify({
+                "success": True,
+                "message": f"Salvate {len(rules)} regole per il gruppo",
+                "container_name": container_name
+            }), 201
+            
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"Error managing crypto rules: {e}")
+        logger.error(f"Full traceback: {tb}")
+        if db:
+            db.rollback()
+        return jsonify({
+            "success": False,
+            "error": str(e),
+            "traceback": tb.split("\n")[-3:]
+        }), 500
+
+@app.route('/api/crypto/rules/<int:rule_id>', methods=['DELETE'])
+@jwt_required()
+def delete_crypto_rule(rule_id):
+    """Delete a specific extraction rule"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        with db.cursor() as cursor:
+            cursor.execute("""
+                DELETE FROM extraction_rules
+                WHERE id = %s AND user_id = %s
+            """, (rule_id, current_user_id))
+            
+            if cursor.rowcount == 0:
+                return jsonify({
+                    "success": False,
+                    "error": "Regola non trovata o non autorizzato"
+                }), 404
+            
+            db.commit()
+            
+        return jsonify({
+            "success": True,
+            "message": "Regola eliminata con successo"
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error deleting crypto rule: {e}")
+        if db:
+            db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/extractors/<source_chat_id>/status', methods=['GET'])
+@jwt_required()
+def get_extractor_status(source_chat_id):
+    """Get status of crypto extractor container for a chat"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        # Get container name from crypto_processors config
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT config 
+                FROM crypto_processors 
+                WHERE user_id = %s AND source_chat_id = %s
+            """, (current_user_id, source_chat_id))
+            
+            processor = cursor.fetchone()
+            
+        if not processor:
+            return jsonify({
+                "success": True,
+                "status": "not_configured",
+                "message": "Nessun extractor configurato per questo gruppo"
+            }), 200
+            
+        config = processor.get('config', {})
+        if isinstance(config, str):
+            config = json.loads(config)
+            
+        container_name = config.get('container_name')
+        
+        if not container_name:
+            return jsonify({
+                "success": True,
+                "status": "not_created",
+                "message": "Container non creato"
+            }), 200
+            
+        # Get container status
+        from crypto.extractor_manager import ExtractorManager
+        extractor_mgr = ExtractorManager()
+        status = extractor_mgr.get_container_status(container_name)
+        
+        return jsonify({
+            "success": True,
+            "container_name": container_name,
+            **status
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error getting extractor status: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/extractors/<source_chat_id>/restart', methods=['POST'])
+@jwt_required()
+def restart_extractor(source_chat_id):
+    """Restart crypto extractor container"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        # Get container name from crypto_processors config
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT config 
+                FROM crypto_processors 
+                WHERE user_id = %s AND source_chat_id = %s
+            """, (current_user_id, source_chat_id))
+            
+            processor = cursor.fetchone()
+            
+        if not processor:
+            return jsonify({"success": False, "error": "Extractor non trovato"}), 404
+            
+        config = processor.get('config', {})
+        if isinstance(config, str):
+            config = json.loads(config)
+            
+        container_name = config.get('container_name')
+        
+        if not container_name:
+            return jsonify({"success": False, "error": "Container non configurato"}), 400
+            
+        # Restart container
+        from crypto.extractor_manager import ExtractorManager
+        extractor_mgr = ExtractorManager()
+        success, message = extractor_mgr.restart_container(container_name)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": "Extractor riavviato con successo"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": message
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error restarting extractor: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/crypto/extractors/<source_chat_id>/stop', methods=['POST'])
+@jwt_required()
+def stop_extractor(source_chat_id):
+    """Stop and remove crypto extractor container"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": "Database connection failed"}), 500
+    
+    try:
+        # Get container name from crypto_processors config
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT config 
+                FROM crypto_processors 
+                WHERE user_id = %s AND source_chat_id = %s
+            """, (current_user_id, source_chat_id))
+            
+            processor = cursor.fetchone()
+            
+        if not processor:
+            return jsonify({"success": False, "error": "Extractor non trovato"}), 404
+            
+        config = processor.get('config', {})
+        if isinstance(config, str):
+            config = json.loads(config)
+            
+        container_name = config.get('container_name')
+        
+        if not container_name:
+            return jsonify({"success": False, "error": "Container non configurato"}), 400
+            
+        # Stop and remove container
+        from crypto.extractor_manager import ExtractorManager
+        extractor_mgr = ExtractorManager()
+        success, message = extractor_mgr.stop_and_remove_container(container_name)
+        
+        if success:
+            # Update processor config to remove container_name
+            config.pop('container_name', None)
+            with db.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE crypto_processors 
+                    SET config = %s, is_active = false, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = %s AND source_chat_id = %s
+                """, (json.dumps(config), current_user_id, source_chat_id))
+                db.commit()
+                
+            return jsonify({
+                "success": True,
+                "message": "Extractor fermato e rimosso"
+            }), 200
+        else:
+            return jsonify({
+                "success": False,
+                "error": message
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Error stopping extractor: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/debug/log', methods=['POST'])
+@jwt_required()
+def debug_log():
+    """Debug endpoint for frontend logging"""
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    logger.info(f"=== FRONTEND DEBUG LOG ===")
+    logger.info(f"User ID: {current_user_id}")
+    logger.info(f"Message: {data.get('message', 'No message')}")
+    logger.info(f"Data: {data.get('data', {})}")
+    logger.info(f"Timestamp: {datetime.now().isoformat()}")
+    
+    return jsonify({"success": True}), 200
+
+# ============================================
+# MESSAGE LISTENERS ENDPOINTS
+# ============================================
+
+@app.route('/api/message-listeners', methods=['GET'])
+@jwt_required()
+def get_message_listeners():
+    """Get all message listeners for the current user"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get listeners with elaboration counts using the view
+            cursor.execute("""
+                SELECT * FROM active_listeners_summary
+                WHERE user_id = %s
+                ORDER BY source_chat_title
+            """, (current_user_id,))
+            
+            listeners = cursor.fetchall()
+            
+            # Convert datetime to ISO format
+            for listener in listeners:
+                if listener.get('last_message_at'):
+                    listener['last_message_at'] = listener['last_message_at'].isoformat()
+            
+            return jsonify({
+                "success": True,
+                "listeners": listeners
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Error fetching message listeners: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/message-listeners', methods=['POST'])
+@jwt_required()
+def create_message_listener():
+    """Create a new message listener"""
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    # Validate required fields
+    required_fields = ['source_chat_id', 'source_chat_title']
+    for field in required_fields:
+        if not data.get(field):
+            return jsonify({"success": False, "error": f"{field} is required"}), 400
+    
+    try:
+        db = get_db_connection()
+        redis_conn = get_redis_connection()
+        
+        # Get user details
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SELECT * FROM users WHERE id = %s", (current_user_id,))
+            user = cursor.fetchone()
+            
+            if not user:
+                return jsonify({"success": False, "error": "User not found"}), 404
+            
+            # Check if listener already exists
+            cursor.execute("""
+                SELECT id FROM message_listeners 
+                WHERE user_id = %s AND source_chat_id = %s
+            """, (current_user_id, data['source_chat_id']))
+            
+            existing = cursor.fetchone()
+            if existing:
+                return jsonify({
+                    "success": False, 
+                    "error": "Listener già esistente per questa chat"
+                }), 409
+            
+            # Create listener in database
+            cursor.execute("""
+                INSERT INTO message_listeners (
+                    user_id, source_chat_id, source_chat_title, source_chat_type,
+                    container_name, container_status
+                ) VALUES (%s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                current_user_id,
+                data['source_chat_id'],
+                data['source_chat_title'],
+                data.get('source_chat_type', 'unknown'),
+                '',  # Container name will be set after creation
+                'creating'
+            ))
+            
+            listener_id = cursor.fetchone()['id']
+            db.commit()
+            
+            # Create container
+            listener_manager = MessageListenerManager()
+            
+            # Check for existing session file
+            session_name = f"user_{hash_phone_number(user['phone'])}"
+            session_file = os.path.join(SESSION_DIR, f"{session_name}.session")
+            
+            # Database URL for the container
+            db_url = Config.DATABASE_URL
+            
+            success, container_name, message = listener_manager.create_listener_container(
+                user_id=current_user_id,
+                phone=user['phone'],
+                api_id=user['api_id'],
+                api_hash=decrypt_api_hash(user['api_hash_encrypted']),
+                session_string="",  # Will be handled by session file
+                source_chat_id=str(data['source_chat_id']),
+                source_chat_title=data['source_chat_title'],
+                source_chat_type=data.get('source_chat_type', 'unknown'),
+                db_url=db_url,
+                listener_id=listener_id,
+                session_file_path=session_file if os.path.exists(session_file) else None
+            )
+            
+            if success:
+                # Update listener with container name
+                cursor.execute("""
+                    UPDATE message_listeners
+                    SET container_name = %s, container_status = 'running'
+                    WHERE id = %s
+                """, (container_name, listener_id))
+                db.commit()
+                
+                return jsonify({
+                    "success": True,
+                    "listener_id": listener_id,
+                    "container_name": container_name,
+                    "message": "Listener creato e avviato con successo"
+                }), 201
+            else:
+                # Delete listener if container creation failed
+                cursor.execute("DELETE FROM message_listeners WHERE id = %s", (listener_id,))
+                db.commit()
+                
+                return jsonify({
+                    "success": False,
+                    "error": f"Errore creazione container: {message}"
+                }), 500
+                
+    except Exception as e:
+        logger.error(f"Error creating message listener: {e}")
+        if db:
+            db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/message-listeners/<int:listener_id>/start', methods=['POST'])
+@jwt_required()
+def start_message_listener(listener_id):
+    """Start a stopped message listener"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get listener
+            cursor.execute("""
+                SELECT * FROM message_listeners
+                WHERE id = %s AND user_id = %s
+            """, (listener_id, current_user_id))
+            
+            listener = cursor.fetchone()
+            if not listener:
+                return jsonify({"success": False, "error": "Listener not found"}), 404
+            
+            # Start container
+            listener_manager = MessageListenerManager()
+            success, message = listener_manager.start_container(listener['container_name'])
+            
+            if success:
+                # Update status
+                cursor.execute("""
+                    UPDATE message_listeners
+                    SET container_status = 'running'
+                    WHERE id = %s
+                """, (listener_id,))
+                db.commit()
+                
+                return jsonify({
+                    "success": True,
+                    "message": "Listener avviato con successo"
+                }), 200
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": message
+                }), 500
+                
+    except Exception as e:
+        logger.error(f"Error starting message listener: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/message-listeners/<int:listener_id>/stop', methods=['POST'])
+@jwt_required()
+def stop_message_listener(listener_id):
+    """Stop a running message listener"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get listener
+            cursor.execute("""
+                SELECT * FROM message_listeners
+                WHERE id = %s AND user_id = %s
+            """, (listener_id, current_user_id))
+            
+            listener = cursor.fetchone()
+            if not listener:
+                return jsonify({"success": False, "error": "Listener not found"}), 404
+            
+            # Stop container
+            listener_manager = MessageListenerManager()
+            success, message = listener_manager.stop_container(listener['container_name'])
+            
+            if success:
+                # Update status
+                cursor.execute("""
+                    UPDATE message_listeners
+                    SET container_status = 'stopped'
+                    WHERE id = %s
+                """, (listener_id,))
+                db.commit()
+                
+                return jsonify({
+                    "success": True,
+                    "message": "Listener fermato con successo"
+                }), 200
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": message
+                }), 500
+                
+    except Exception as e:
+        logger.error(f"Error stopping message listener: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/message-listeners/<int:listener_id>', methods=['DELETE'])
+@jwt_required()
+def delete_message_listener(listener_id):
+    """Delete a message listener and its container"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get listener
+            cursor.execute("""
+                SELECT * FROM message_listeners
+                WHERE id = %s AND user_id = %s
+            """, (listener_id, current_user_id))
+            
+            listener = cursor.fetchone()
+            if not listener:
+                return jsonify({"success": False, "error": "Listener not found"}), 404
+            
+            # Stop and remove container
+            listener_manager = MessageListenerManager()
+            listener_manager.stop_container(listener['container_name'])
+            listener_manager.remove_container(listener['container_name'])
+            
+            # Delete from database (cascades to elaborations and messages)
+            cursor.execute("DELETE FROM message_listeners WHERE id = %s", (listener_id,))
+            db.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "Listener eliminato con successo"
+            }), 200
+                
+    except Exception as e:
+        logger.error(f"Error deleting message listener: {e}")
+        if db:
+            db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+# ============================================
+# MESSAGE ELABORATIONS ENDPOINTS
+# ============================================
+
+@app.route('/api/message-listeners/<int:listener_id>/elaborations', methods=['GET'])
+@jwt_required()
+def get_message_elaborations(listener_id):
+    """Get all elaborations for a message listener"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Verify listener ownership
+            cursor.execute("""
+                SELECT id FROM message_listeners
+                WHERE id = %s AND user_id = %s
+            """, (listener_id, current_user_id))
+            
+            if not cursor.fetchone():
+                return jsonify({"success": False, "error": "Listener not found"}), 404
+            
+            # Get elaborations
+            cursor.execute("""
+                SELECT * FROM message_elaborations
+                WHERE listener_id = %s
+                ORDER BY priority, created_at
+            """, (listener_id,))
+            
+            elaborations = cursor.fetchall()
+            
+            # Convert datetime to ISO format
+            for elab in elaborations:
+                if elab.get('created_at'):
+                    elab['created_at'] = elab['created_at'].isoformat()
+                if elab.get('last_processed_at'):
+                    elab['last_processed_at'] = elab['last_processed_at'].isoformat()
+                if elab.get('last_error_at'):
+                    elab['last_error_at'] = elab['last_error_at'].isoformat()
+            
+            return jsonify({
+                "success": True,
+                "elaborations": elaborations
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Error fetching elaborations: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/message-listeners/<int:listener_id>/elaborations', methods=['POST'])
+@jwt_required()
+def create_message_elaboration(listener_id):
+    """Create a new elaboration for a message listener"""
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    # Validate required fields
+    required_fields = ['elaboration_type', 'elaboration_name', 'config']
+    for field in required_fields:
+        if not data.get(field):
+            return jsonify({"success": False, "error": f"{field} is required"}), 400
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Verify listener ownership
+            cursor.execute("""
+                SELECT id, container_name FROM message_listeners
+                WHERE id = %s AND user_id = %s
+            """, (listener_id, current_user_id))
+            
+            listener = cursor.fetchone()
+            if not listener:
+                return jsonify({"success": False, "error": "Listener not found"}), 404
+            
+            # Create elaboration
+            cursor.execute("""
+                INSERT INTO message_elaborations (
+                    listener_id, elaboration_type, elaboration_name, config
+                ) VALUES (%s, %s, %s, %s)
+                RETURNING id
+            """, (
+                listener_id,
+                data['elaboration_type'],
+                data['elaboration_name'],
+                json.dumps(data['config'])
+            ))
+            
+            elaboration_id = cursor.fetchone()['id']
+            db.commit()
+            
+            # Update listener container with new elaborations
+            listener_manager = MessageListenerManager()
+            
+            # Get all elaborations for the listener
+            cursor.execute("""
+                SELECT * FROM message_elaborations
+                WHERE listener_id = %s AND is_active = true
+                ORDER BY priority
+            """, (listener_id,))
+            
+            elaborations = cursor.fetchall()
+            
+            # Format elaborations for the container
+            formatted_elaborations = []
+            for elab in elaborations:
+                formatted_elaborations.append({
+                    'id': elab['id'],
+                    'type': elab['elaboration_type'],
+                    'config': elab['config'] if isinstance(elab['config'], dict) else json.loads(elab['config'])
+                })
+            
+            # Update container configuration
+            success, message = listener_manager.update_listener_elaborations(
+                listener['container_name'],
+                formatted_elaborations
+            )
+            
+            if not success:
+                logger.warning(f"Failed to update container elaborations: {message}")
+            
+            return jsonify({
+                "success": True,
+                "elaboration_id": elaboration_id,
+                "message": "Elaborazione creata con successo"
+            }), 201
+                
+    except Exception as e:
+        logger.error(f"Error creating elaboration: {e}")
+        if db:
+            db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/elaborations/<int:elaboration_id>/activate', methods=['POST'])
+@jwt_required()
+def activate_elaboration(elaboration_id):
+    """Activate an elaboration"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Verify ownership
+            cursor.execute("""
+                SELECT e.*, l.container_name
+                FROM message_elaborations e
+                JOIN message_listeners l ON e.listener_id = l.id
+                WHERE e.id = %s AND l.user_id = %s
+            """, (elaboration_id, current_user_id))
+            
+            elaboration = cursor.fetchone()
+            if not elaboration:
+                return jsonify({"success": False, "error": "Elaboration not found"}), 404
+            
+            # Update status
+            cursor.execute("""
+                UPDATE message_elaborations
+                SET is_active = true
+                WHERE id = %s
+            """, (elaboration_id,))
+            db.commit()
+            
+            # Update container
+            _update_container_elaborations(cursor, elaboration['listener_id'], elaboration['container_name'])
+            
+            return jsonify({
+                "success": True,
+                "message": "Elaborazione attivata con successo"
+            }), 200
+                
+    except Exception as e:
+        logger.error(f"Error activating elaboration: {e}")
+        if db:
+            db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/elaborations/<int:elaboration_id>/deactivate', methods=['POST'])
+@jwt_required()
+def deactivate_elaboration(elaboration_id):
+    """Deactivate an elaboration"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Verify ownership
+            cursor.execute("""
+                SELECT e.*, l.container_name
+                FROM message_elaborations e
+                JOIN message_listeners l ON e.listener_id = l.id
+                WHERE e.id = %s AND l.user_id = %s
+            """, (elaboration_id, current_user_id))
+            
+            elaboration = cursor.fetchone()
+            if not elaboration:
+                return jsonify({"success": False, "error": "Elaboration not found"}), 404
+            
+            # Update status
+            cursor.execute("""
+                UPDATE message_elaborations
+                SET is_active = false
+                WHERE id = %s
+            """, (elaboration_id,))
+            db.commit()
+            
+            # Update container
+            _update_container_elaborations(cursor, elaboration['listener_id'], elaboration['container_name'])
+            
+            return jsonify({
+                "success": True,
+                "message": "Elaborazione disattivata con successo"
+            }), 200
+                
+    except Exception as e:
+        logger.error(f"Error deactivating elaboration: {e}")
+        if db:
+            db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/elaborations/<int:elaboration_id>', methods=['DELETE'])
+@jwt_required()
+def delete_elaboration(elaboration_id):
+    """Delete an elaboration"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Verify ownership
+            cursor.execute("""
+                SELECT e.*, l.container_name
+                FROM message_elaborations e
+                JOIN message_listeners l ON e.listener_id = l.id
+                WHERE e.id = %s AND l.user_id = %s
+            """, (elaboration_id, current_user_id))
+            
+            elaboration = cursor.fetchone()
+            if not elaboration:
+                return jsonify({"success": False, "error": "Elaboration not found"}), 404
+            
+            listener_id = elaboration['listener_id']
+            container_name = elaboration['container_name']
+            
+            # Delete elaboration
+            cursor.execute("DELETE FROM message_elaborations WHERE id = %s", (elaboration_id,))
+            db.commit()
+            
+            # Update container
+            _update_container_elaborations(cursor, listener_id, container_name)
+            
+            return jsonify({
+                "success": True,
+                "message": "Elaborazione eliminata con successo"
+            }), 200
+                
+    except Exception as e:
+        logger.error(f"Error deleting elaboration: {e}")
+        if db:
+            db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+def _update_container_elaborations(cursor, listener_id, container_name):
+    """Helper function to update container elaborations"""
+    try:
+        # Get all active elaborations
+        cursor.execute("""
+            SELECT * FROM message_elaborations
+            WHERE listener_id = %s AND is_active = true
+            ORDER BY priority
+        """, (listener_id,))
+        
+        elaborations = cursor.fetchall()
+        
+        # Format elaborations for the container
+        formatted_elaborations = []
+        for elab in elaborations:
+            formatted_elaborations.append({
+                'id': elab['id'],
+                'type': elab['elaboration_type'],
+                'config': elab['config'] if isinstance(elab['config'], dict) else json.loads(elab['config'])
+            })
+        
+        # Update container
+        listener_manager = MessageListenerManager()
+        success, message = listener_manager.update_listener_elaborations(
+            container_name,
+            formatted_elaborations
+        )
+        
+        if not success:
+            logger.warning(f"Failed to update container elaborations: {message}")
+            
+    except Exception as e:
+        logger.error(f"Error updating container elaborations: {e}")
 
 if __name__ == '__main__':
     app = create_app()

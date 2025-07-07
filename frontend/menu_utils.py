@@ -25,7 +25,9 @@ def get_unified_menu(current_page: Optional[str] = None) -> str:
         {"url": "/dashboard", "icon": "🏠", "text": "Dashboard", "id": "dashboard"},
         {"url": "/profile", "icon": "👤", "text": "Profilo", "id": "profile"},
         {"url": "/chats", "icon": "💬", "text": "Le mie Chat", "id": "chats"},
+        {"url": "/message-manager", "icon": "📨", "text": "Gestione Messaggi", "id": "message-manager"},
         {"url": "/configured-channels", "icon": "🔄", "text": "Tutti i Reindirizzamenti", "id": "configured-channels"},
+        {"url": "/crypto-dashboard", "icon": "🚀", "text": "Crypto", "id": "crypto-dashboard"},
         {"url": "/find", "icon": "🔍", "text": "Trova Chat", "id": "find"},
         {"url": "/security", "icon": "🔐", "text": "Sicurezza", "id": "security"},
         {"url": "#", "icon": "🚪", "text": "Logout", "id": "logout", "onclick": "logout()"}
