@@ -3,45 +3,117 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Solanagram - Advanced crypto signal processing and trading analytics platform">
+    <meta name="author" content="Solanagram Team">
     <title>{% block title %}Solanagram{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=202506180002">
+    
+    <!-- Preload critical fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    
+    <!-- Main stylesheet -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=202506180003">
+    
     <!-- Corporate Menu Styles -->
     {{ menu_styles|safe }}
+    
+    <!-- PWA meta tags -->
+    <meta name="theme-color" content="#0284c7">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    
     {% block head %}{% endblock %}
 </head>
 <body>
+    <!-- Skip to main content for accessibility -->
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    
     <!-- Corporate Navigation Menu -->
     {{ menu_html|safe }}
 
-    <main class="main-content">
+    <!-- Main content wrapper -->
+    <main id="main-content" class="main-content" role="main">
+        <!-- Loading overlay -->
+        <div id="loading-overlay" class="loading-overlay" style="display: none;">
+            <div class="loading-content">
+                <div class="spinner"></div>
+                <p>Caricamento in corso...</p>
+            </div>
+        </div>
+        
+        <!-- Toast notifications container -->
+        <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+        
         {% block content %}{% endblock %}
     </main>
 
     <!-- Corporate Menu Scripts -->
     {{ menu_scripts|safe }}
 
+    <!-- Enhanced notification system -->
     <script>
-        // Show message function
-        function showMessage(message, type = 'info') {
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message message-${type}`;
-            messageDiv.textContent = message;
+        // Toast notification system
+        function createToast(message, type = 'info', duration = 5000) {
+            const toastContainer = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            const toastId = 'toast-' + Date.now();
             
-            // Insert at top of main content
-            const mainContent = document.querySelector('.main-content');
-            if (mainContent) {
-                mainContent.insertBefore(messageDiv, mainContent.firstChild);
+            toast.id = toastId;
+            toast.className = `toast toast-${type}`;
+            toast.setAttribute('role', 'alert');
+            toast.setAttribute('aria-live', 'assertive');
+            
+            const iconMap = {
+                'success': 'fas fa-check-circle',
+                'error': 'fas fa-exclamation-circle',
+                'warning': 'fas fa-exclamation-triangle',
+                'info': 'fas fa-info-circle'
+            };
+            
+            toast.innerHTML = `
+                <div class="toast-header">
+                    <i class="${iconMap[type] || iconMap.info}"></i>
+                    <button type="button" class="toast-close" onclick="removeToast('${toastId}')" aria-label="Close notification">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="toast-body">
+                    ${message}
+                </div>
+                <div class="toast-progress">
+                    <div class="toast-progress-bar" style="animation-duration: ${duration}ms;"></div>
+                </div>
+            `;
+            
+            toastContainer.appendChild(toast);
+            
+            // Trigger animation
+            setTimeout(() => toast.classList.add('show'), 100);
+            
+            // Auto remove
+            setTimeout(() => removeToast(toastId), duration);
+            
+            return toastId;
+        }
+        
+        function removeToast(toastId) {
+            const toast = document.getElementById(toastId);
+            if (toast) {
+                toast.classList.add('hide');
+                setTimeout(() => {
+                    if (toast.parentNode) {
+                        toast.parentNode.removeChild(toast);
+                    }
+                }, 300);
             }
-            
-            // Auto-remove after 5 seconds
-            setTimeout(() => {
-                if (messageDiv.parentNode) {
-                    messageDiv.parentNode.removeChild(messageDiv);
-                }
-            }, 5000);
+        }
+        
+        // Legacy showMessage function for backward compatibility
+        function showMessage(message, type = 'info') {
+            createToast(message, type);
         }
 
-        // API request helper
+        // Enhanced API request helper with better error handling
         async function makeRequest(url, options = {}) {
             const token = localStorage.getItem('session_token') || localStorage.getItem('access_token');
             const headers = {
@@ -53,43 +125,302 @@
                 headers.Authorization = `Bearer ${token}`;
             }
             
+            // Show loading for longer requests
+            const showLoading = options.showLoading !== false;
+            let loadingTimeout;
+            
+            if (showLoading) {
+                loadingTimeout = setTimeout(() => {
+                    document.getElementById('loading-overlay').style.display = 'flex';
+                }, 200);
+            }
+            
             try {
                 const response = await fetch(url, {
                     ...options,
                     headers
                 });
                 
+                clearTimeout(loadingTimeout);
+                if (showLoading) {
+                    document.getElementById('loading-overlay').style.display = 'none';
+                }
+                
                 if (response.status === 401) {
                     localStorage.removeItem('access_token');
                     localStorage.removeItem('session_token');
-                    window.location.href = '/';
+                    createToast('Sessione scaduta. Verrai reindirizzato alla pagina di login.', 'warning');
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 2000);
                     return null;
+                }
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
                 
                 const data = await response.json();
                 return data;
             } catch (error) {
+                clearTimeout(loadingTimeout);
+                if (showLoading) {
+                    document.getElementById('loading-overlay').style.display = 'none';
+                }
+                
                 console.error('Request error:', error);
+                createToast('Si è verificato un errore durante la richiesta', 'error');
                 throw error;
             }
         }
 
-        // Loading state helpers
-        function showLoading() {
-            const loadingElements = document.querySelectorAll('.loading');
-            loadingElements.forEach(element => {
-                element.style.display = 'block';
-            });
+        // Loading state helpers with enhanced UX
+        function showLoading(message = 'Caricamento...') {
+            const overlay = document.getElementById('loading-overlay');
+            const loadingText = overlay.querySelector('p');
+            if (loadingText) {
+                loadingText.textContent = message;
+            }
+            overlay.style.display = 'flex';
         }
 
         function hideLoading() {
-            const loadingElements = document.querySelectorAll('.loading');
-            loadingElements.forEach(element => {
-                element.style.display = 'none';
-            });
+            document.getElementById('loading-overlay').style.display = 'none';
         }
+        
+        // Enhanced notification function
+        function showNotification(type, message, duration = 5000) {
+            createToast(message, type, duration);
+        }
+        
+        // Keyboard accessibility
+        document.addEventListener('keydown', function(e) {
+            // ESC key to close modals or overlays
+            if (e.key === 'Escape') {
+                const loadingOverlay = document.getElementById('loading-overlay');
+                if (loadingOverlay && loadingOverlay.style.display === 'flex') {
+                    hideLoading();
+                }
+                
+                // Close any open toasts
+                const toasts = document.querySelectorAll('.toast.show');
+                toasts.forEach(toast => {
+                    removeToast(toast.id);
+                });
+            }
+        });
+        
+        // Initialize any tooltips or interactive elements
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add ripple effect to buttons
+            const buttons = document.querySelectorAll('.btn');
+            buttons.forEach(button => {
+                button.addEventListener('click', function(e) {
+                    const ripple = document.createElement('span');
+                    const rect = this.getBoundingClientRect();
+                    const size = Math.max(rect.width, rect.height);
+                    const x = e.clientX - rect.left - size / 2;
+                    const y = e.clientY - rect.top - size / 2;
+                    
+                    ripple.style.width = ripple.style.height = size + 'px';
+                    ripple.style.left = x + 'px';
+                    ripple.style.top = y + 'px';
+                    ripple.classList.add('ripple');
+                    
+                    this.appendChild(ripple);
+                    
+                    setTimeout(() => {
+                        ripple.remove();
+                    }, 600);
+                });
+            });
+        });
     </script>
 
     {% block scripts %}{% endblock %}
+    
+    <!-- Additional styles for enhanced components -->
+    <style>
+        /* Skip link for accessibility */
+        .skip-link {
+            position: absolute;
+            top: -40px;
+            left: 6px;
+            background: var(--primary-600);
+            color: white;
+            padding: 8px;
+            border-radius: var(--radius-md);
+            text-decoration: none;
+            z-index: 9999;
+            font-weight: 500;
+        }
+        
+        .skip-link:focus {
+            top: 6px;
+        }
+        
+        /* Loading overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(255, 255, 255, 0.9);
+            backdrop-filter: blur(8px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9998;
+        }
+        
+        .loading-content {
+            text-align: center;
+            padding: var(--space-8);
+        }
+        
+        .loading-content p {
+            margin-top: var(--space-4);
+            color: var(--secondary-600);
+            font-weight: 500;
+        }
+        
+        /* Toast notifications */
+        .toast-container {
+            position: fixed;
+            top: var(--space-6);
+            right: var(--space-6);
+            z-index: 9999;
+            max-width: 400px;
+        }
+        
+        .toast {
+            background: white;
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-xl);
+            margin-bottom: var(--space-3);
+            border: 1px solid var(--secondary-200);
+            overflow: hidden;
+            transform: translateX(400px);
+            opacity: 0;
+            transition: all var(--transition-normal);
+        }
+        
+        .toast.show {
+            transform: translateX(0);
+            opacity: 1;
+        }
+        
+        .toast.hide {
+            transform: translateX(400px);
+            opacity: 0;
+        }
+        
+        .toast-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: var(--space-3) var(--space-4);
+            border-bottom: 1px solid var(--secondary-200);
+        }
+        
+        .toast-header i:first-child {
+            font-size: var(--text-lg);
+        }
+        
+        .toast-close {
+            background: none;
+            border: none;
+            color: var(--secondary-500);
+            cursor: pointer;
+            padding: var(--space-1);
+            border-radius: var(--radius-sm);
+            transition: all var(--transition-fast);
+        }
+        
+        .toast-close:hover {
+            background: var(--secondary-100);
+            color: var(--secondary-700);
+        }
+        
+        .toast-body {
+            padding: var(--space-4);
+            color: var(--secondary-700);
+        }
+        
+        .toast-progress {
+            height: 3px;
+            background: var(--secondary-200);
+        }
+        
+        .toast-progress-bar {
+            height: 100%;
+            width: 100%;
+            transform-origin: left;
+            animation: toast-progress linear forwards;
+        }
+        
+        @keyframes toast-progress {
+            from { transform: scaleX(1); }
+            to { transform: scaleX(0); }
+        }
+        
+        /* Toast color variants */
+        .toast-success .toast-header i:first-child { color: var(--success-600); }
+        .toast-success .toast-progress-bar { background: var(--success-500); }
+        
+        .toast-error .toast-header i:first-child { color: var(--danger-600); }
+        .toast-error .toast-progress-bar { background: var(--danger-500); }
+        
+        .toast-warning .toast-header i:first-child { color: var(--warning-600); }
+        .toast-warning .toast-progress-bar { background: var(--warning-500); }
+        
+        .toast-info .toast-header i:first-child { color: var(--info-600); }
+        .toast-info .toast-progress-bar { background: var(--info-500); }
+        
+        /* Button ripple effect */
+        .btn {
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .ripple {
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(0);
+            animation: ripple-animation 0.6s linear;
+            pointer-events: none;
+        }
+        
+        @keyframes ripple-animation {
+            to {
+                transform: scale(4);
+                opacity: 0;
+            }
+        }
+        
+        /* Responsive toast positioning */
+        @media (max-width: 768px) {
+            .toast-container {
+                top: var(--space-4);
+                right: var(--space-4);
+                left: var(--space-4);
+                max-width: none;
+            }
+            
+            .toast {
+                transform: translateY(-100px);
+            }
+            
+            .toast.show {
+                transform: translateY(0);
+            }
+            
+            .toast.hide {
+                transform: translateY(-100px);
+            }
+        }
+    </style>
 </body>
 </html> 
