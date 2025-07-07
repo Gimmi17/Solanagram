@@ -563,6 +563,8 @@ def login():
         Il sistema utilizza i token di autenticazione ufficiali di Telegram.<br>
         Se hai effettuato il login recentemente, puoi riutilizzare i token salvati senza richiedere nuovi codici SMS.<br>
         <small>Questo sistema ufficiale evita completamente i limiti di richieste a Telegram.</small>
+        <br><br>
+        <small>ℹ️ <strong>Nota:</strong> Il sistema effettua automaticamente più tentativi per garantire una connessione stabile con i server Telegram. Se la connessione si interrompe, verrà automaticamente ristabilita. In caso di errori persistenti, il pulsante "Invia codice" può essere cliccato nuovamente.</small>
     </div>
     
     <form id="loginForm">
@@ -732,17 +734,20 @@ def login():
                 return;
             }
             
+            // FIXED: Better UX with informative loading message
             showLoading();
+            showMessage('🔄 Connessione a Telegram in corso... Il sistema effettuerà automaticamente dei tentativi per garantire una connessione stabile.', 'info');
             
-            const result = await makeRequest('/api/auth/login', {
-                method: 'POST',
-                body: JSON.stringify({ 
-                    phone_number: phone,
-                    password: password 
-                })
-            });
-            
-            hideLoading();
+            try {
+                const result = await makeRequest('/api/auth/login', {
+                    method: 'POST',
+                    body: JSON.stringify({ 
+                        phone_number: phone,
+                        password: password 
+                    })
+                });
+                
+                hideLoading();
             
             if (result.success) {
                 // Salva user_id per la verifica
@@ -780,6 +785,10 @@ def login():
                 } else {
                     showMessage(result.error || 'Errore durante il login', 'error');
                 }
+            } catch (error) {
+                hideLoading();
+                console.error('Login error:', error);
+                showMessage('❌ Errore di connessione. Riprova tra qualche secondo.', 'error');
             }
         });
     </script>
