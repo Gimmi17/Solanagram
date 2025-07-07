@@ -21,11 +21,38 @@
     {{ menu_scripts|safe }}
 
     <script>
-        // Show message function
+        // Show message function - Unified error/message system
         function showMessage(message, type = 'info') {
+            // Remove any existing messages to avoid duplicates
+            const existingMessages = document.querySelectorAll('.message');
+            existingMessages.forEach(msg => {
+                if (msg.parentNode) {
+                    msg.parentNode.removeChild(msg);
+                }
+            });
+            
             const messageDiv = document.createElement('div');
             messageDiv.className = `message message-${type}`;
-            messageDiv.textContent = message;
+            
+            // Create close button
+            const closeButton = document.createElement('button');
+            closeButton.className = 'message-close';
+            closeButton.innerHTML = '&times;';
+            closeButton.setAttribute('aria-label', 'Chiudi messaggio');
+            closeButton.onclick = function() {
+                if (messageDiv.parentNode) {
+                    messageDiv.parentNode.removeChild(messageDiv);
+                }
+            };
+            
+            // Create message content
+            const messageContent = document.createElement('div');
+            messageContent.className = 'message-content';
+            messageContent.innerHTML = message; // Using innerHTML to support HTML content
+            
+            // Assemble message
+            messageDiv.appendChild(messageContent);
+            messageDiv.appendChild(closeButton);
             
             // Insert at top of main content
             const mainContent = document.querySelector('.main-content');
@@ -33,15 +60,11 @@
                 mainContent.insertBefore(messageDiv, mainContent.firstChild);
             }
             
-            // Auto-remove after 5 seconds
-            setTimeout(() => {
-                if (messageDiv.parentNode) {
-                    messageDiv.parentNode.removeChild(messageDiv);
-                }
-            }, 5000);
+            // Scroll to message for better visibility
+            messageDiv.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
 
-        // API request helper
+        // API request helper - Enhanced with unified error handling
         async function makeRequest(url, options = {}) {
             const token = localStorage.getItem('session_token') || localStorage.getItem('access_token');
             const headers = {
@@ -59,20 +82,69 @@
                     headers
                 });
                 
+                // Handle 401 Unauthorized
                 if (response.status === 401) {
                     localStorage.removeItem('access_token');
                     localStorage.removeItem('session_token');
-                    window.location.href = '/';
+                    showMessage('⚠️ Sessione scaduta. Reindirizzamento al login...', 'warning');
+                    setTimeout(() => {
+                        window.location.href = '/';
+                    }, 2000);
                     return null;
                 }
                 
                 const data = await response.json();
+                
+                // Handle API errors that return success: false or error fields
+                if (data && data.success === false && data.error) {
+                    const errorMessage = typeof data.error === 'string' ? data.error : 'Errore sconosciuto';
+                    if (!options.suppressErrorMessage) {
+                        showMessage(`❌ ${errorMessage}`, 'error');
+                    }
+                    return data; // Return the data even if there's an error for specific handling
+                }
+                
+                // Handle server errors (5xx status codes)
+                if (response.status >= 500) {
+                    if (!options.suppressErrorMessage) {
+                        showMessage('❌ Errore del server. Riprova più tardi.', 'error');
+                    }
+                    return { success: false, error: 'Server error' };
+                }
+                
+                // Handle client errors (4xx status codes except 401)
+                if (response.status >= 400 && response.status < 500) {
+                    const errorMessage = data?.error || data?.message || 'Richiesta non valida';
+                    if (!options.suppressErrorMessage) {
+                        showMessage(`❌ ${errorMessage}`, 'error');
+                    }
+                    return data || { success: false, error: errorMessage };
+                }
+                
                 return data;
             } catch (error) {
                 console.error('Request error:', error);
+                if (!options.suppressErrorMessage) {
+                    showMessage('❌ Errore di connessione. Verifica la tua connessione internet.', 'error');
+                }
                 throw error;
             }
         }
+        
+        // Global error handler for unhandled promise rejections
+        window.addEventListener('unhandledrejection', function(event) {
+            console.error('Unhandled promise rejection:', event.reason);
+            showMessage('❌ Si è verificato un errore imprevisto.', 'error');
+        });
+        
+        // Global error handler for JavaScript errors
+        window.addEventListener('error', function(event) {
+            console.error('JavaScript error:', event.error);
+            // Only show message for critical errors, not for minor issues
+            if (event.error && event.error.stack && !event.error.stack.includes('extension')) {
+                showMessage('❌ Errore nell\'applicazione. Ricarica la pagina se i problemi persistono.', 'error');
+            }
+        });
 
         // Loading state helpers
         function showLoading() {
