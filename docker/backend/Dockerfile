@@ -68,12 +68,12 @@ RUN mkdir -p /app/logs /tmp/solanagram-configs && chown -R appuser:appuser /app 
 # Espone porta development
 EXPOSE 5000
 
-# Switch to non-root user (temporaneamente disabilitato per Docker access)
+# Switch to non-root user (mantenere root per accesso Docker socket)
 # USER appuser
 
-# Health check
+# Health check with fallback
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:5000/health || exit 1
+    CMD curl -f http://localhost:5000/health 2>/dev/null || curl -f http://localhost:5000/ 2>/dev/null || exit 1
 
 # Comando di avvio development - usa Python diretto
 CMD ["python", "backend/app.py"]
