@@ -1486,10 +1486,18 @@ def chats_list():
     content = f"""
     {menu_html}
     
-    <h2>💬 Le mie Chat Telegram</h2>
+    <h2>📝 Logging Messaggi Telegram</h2>
     
     <div class="status info">
-        ℹ️ Tutte le tue chat con ID e dettagli - clicca sui bottoni per copiare
+        ℹ️ Gestisci il logging dei messaggi per le tue chat - attiva il logging per salvare tutti i messaggi nel database
+    </div>
+    
+    <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #ffc107; border-radius: 8px; background: #fff3cd;">
+        <p style="margin: 0;">
+            <strong>💡 Sviluppi futuri:</strong> 
+            <a href="/chats-backup" style="color: #856404; text-decoration: underline;">Accedi alle vecchie funzionalità chat</a> 
+            per copiare ID e gestire inoltri (funzionalità di backup).
+        </p>
     </div>
     
     <div class="loading">
@@ -1548,6 +1556,9 @@ def chats_list():
                     // Setup filtro di ricerca
                     document.getElementById('searchFilter').addEventListener('input', filterChats);
                     
+                    // Update logging button states
+                    updateLoggingButtonStates();
+                    
                 }} else {{
                     // Controlla se è un errore di autorizzazione persa
                     if (result.error && result.error.includes('Authorization lost')) {{
@@ -1574,38 +1585,134 @@ def chats_list():
                 return;
             }}
             
+            // Raggruppa le chat per stato di logging
+            const chatsWithLogging = [];
+            const chatsWithoutLogging = [];
+            
+            filteredChats.forEach(chat => {{
+                const loggingBtn = document.getElementById(`loggingBtn_${{chat.id}}`);
+                // Se il bottone esiste e mostra "Ferma Logging", la chat ha logging attivo
+                if (loggingBtn && loggingBtn.innerHTML.includes('⏹️ Ferma Logging')) {{
+                    chatsWithLogging.push(chat);
+                }} else {{
+                    // Altrimenti, controlla se abbiamo informazioni sullo stato dal backend
+                    // Per ora mettiamo tutte le altre chat nel gruppo senza logging
+                    chatsWithoutLogging.push(chat);
+                }}
+            }});
+            
             container.innerHTML = `
                 <div style="margin-bottom: 20px;">
                     <strong>📊 ${{filteredChats.length}} chat trovate (su ${{allChats.length}} totali)</strong>
+                    <div style="margin-top: 5px; font-size: 0.9em; color: #666;">
+                        📝 ${{chatsWithLogging.length}} con logging attivo | 💬 ${{chatsWithoutLogging.length}} senza logging
+                    </div>
                 </div>
                 
-                ${{filteredChats.map(chat => `
-                    <div class="card" style="margin-bottom: 15px;">
-                        <div style="display: flex; justify-content: between; align-items: start;">
-                            <div style="flex: 1;">
-                                <h3>${{escapeHtml(chat.title)}} ${{getChatIcon(chat.type)}}</h3>
-                                <p><strong>ID:</strong> 
-                                    <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${{chat.id}}</code>
-                                    <button onclick="copyToClipboard('${{chat.id}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
-                                </p>
-                                <p><strong>Tipo:</strong> ${{getChatTypeLabel(chat.type)}}</p>
-                                ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}} 
-                                    <button onclick="copyToClipboard('@${{chat.username}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
-                                </p>` : ''}}
-                                ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
-                                ${{chat.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(chat.description.substring(0, 100))}}${{chat.description.length > 100 ? '...' : ''}}</p>` : ''}}
-                                ${{chat.unread_count ? `<p><strong>Non letti:</strong> ${{chat.unread_count}} messaggi</p>` : ''}}
-                                ${{chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(chat.last_message_date).toLocaleDateString('it-IT')}}</p>` : ''}}
-                                
-                                <div style="margin-top: 15px;">
-                                    <a href="/forwarders/${{chat.id}}" class="btn btn-primary">
-                                        🔄 Vedi inoltri
-                                    </a>
+                ${{chatsWithLogging.length > 0 ? `
+                    <div style="margin-bottom: 25px;">
+                        <h3 style="color: #28a745; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 2px solid #28a745;">
+                            📝 Chat con Logging Attivo (${{chatsWithLogging.length}})
+                        </h3>
+                ` : `
+                    <div style="margin-bottom: 25px; text-align: center; padding: 20px; background: #f8fff9; border: 1px solid #d4edda; border-radius: 8px;">
+                        <h3 style="color: #28a745; margin-bottom: 10px;">📝 Nessuna chat con logging attivo</h3>
+                        <p style="color: #6c757d; margin: 0;">Attiva il logging per una chat per vederla qui</p>
+                    </div>
+                `}}
+                        ${{chatsWithLogging.map(chat => `
+                            <div class="card" style="margin-bottom: 15px; border-left: 4px solid #28a745; background: linear-gradient(135deg, #f8fff9 0%, #ffffff 100%);">
+                                <div style="display: flex; justify-content: between; align-items: start;">
+                                    <div style="flex: 1;">
+                                        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                                            <h3 style="margin: 0; margin-right: 10px;">${{escapeHtml(chat.title)}} ${{getChatIcon(chat.type)}}</h3>
+                                            <span class="badge badge-success" style="background: #28a745; color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.8em;">
+                                                📝 Logging Attivo
+                                            </span>
+                                        </div>
+                                        <p><strong>ID:</strong> 
+                                            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${{chat.id}}</code>
+                                            <button onclick="copyToClipboard('${{chat.id}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
+                                        </p>
+                                        <p><strong>Tipo:</strong> ${{getChatTypeLabel(chat.type)}}</p>
+                                        ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}} 
+                                            <button onclick="copyToClipboard('@${{chat.username}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
+                                        </p>` : ''}}
+                                        ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
+                                        ${{chat.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(chat.description.substring(0, 100))}}${{chat.description.length > 100 ? '...' : ''}}</p>` : ''}}
+                                        ${{chat.unread_count ? `<p><strong>Non letti:</strong> ${{chat.unread_count}} messaggi</p>` : ''}}
+                                        ${{chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(chat.last_message_date).toLocaleDateString('it-IT')}}</p>` : ''}}
+                                        
+                                        <div style="margin-top: 15px;">
+                                            <button onclick="toggleLogging(${{chat.id}}, '${{escapeHtml(chat.title)}}', '${{chat.username || ''}}', '${{chat.type}}')" class="btn btn-danger" id="loggingBtn_${{chat.id}}">
+                                                ⏹️ Ferma Logging
+                                            </button>
+                                            <button onclick="viewLogs(${{chat.id}})" class="btn btn-info" style="margin-left: 10px;" id="viewLogsBtn_${{chat.id}}">
+                                                📋 Vedi Log
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
+                        `).join('')}}
                     </div>
-                `).join('')}}
+                ` : ''}}
+                
+                ${{chatsWithoutLogging.length > 0 ? `
+                    <div>
+                        <h3 style="color: #6c757d; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 2px solid #6c757d;">
+                            💬 Chat senza Logging (${{chatsWithoutLogging.length}})
+                        </h3>
+                ` : `
+                    <div style="text-align: center; padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px;">
+                        <h3 style="color: #6c757d; margin-bottom: 10px;">💬 Tutte le chat hanno logging attivo</h3>
+                        <p style="color: #6c757d; margin: 0;">Ottimo lavoro! Tutte le chat sono sotto logging</p>
+                    </div>
+                `}}
+                
+                ${{chatsWithLogging.length === 0 && chatsWithoutLogging.length === 0 ? `
+                    <div style="text-align: center; padding: 40px; color: #6c757d;">
+                        <h3>📝 Nessuna chat trovata</h3>
+                        <p>Prova a modificare i criteri di ricerca</p>
+                    </div>
+                ` : ''}}
+                        ${{chatsWithoutLogging.map(chat => `
+                            <div class="card" style="margin-bottom: 15px; border-left: 4px solid #6c757d; background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);">
+                                <div style="display: flex; justify-content: between; align-items: start;">
+                                    <div style="flex: 1;">
+                                        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                                            <h3 style="margin: 0; margin-right: 10px;">${{escapeHtml(chat.title)}} ${{getChatIcon(chat.type)}}</h3>
+                                            <span class="badge badge-secondary" style="background: #6c757d; color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.8em;">
+                                                💬 Nessun Logging
+                                            </span>
+                                        </div>
+                                        <p><strong>ID:</strong> 
+                                            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${{chat.id}}</code>
+                                            <button onclick="copyToClipboard('${{chat.id}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
+                                        </p>
+                                        <p><strong>Tipo:</strong> ${{getChatTypeLabel(chat.type)}}</p>
+                                        ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}} 
+                                            <button onclick="copyToClipboard('@${{chat.username}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
+                                        </p>` : ''}}
+                                        ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
+                                        ${{chat.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(chat.description.substring(0, 100))}}${{chat.description.length > 100 ? '...' : ''}}</p>` : ''}}
+                                        ${{chat.unread_count ? `<p><strong>Non letti:</strong> ${{chat.unread_count}} messaggi</p>` : ''}}
+                                        ${{chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(chat.last_message_date).toLocaleDateString('it-IT')}}</p>` : ''}}
+                                        
+                                        <div style="margin-top: 15px;">
+                                            <button onclick="toggleLogging(${{chat.id}}, '${{escapeHtml(chat.title)}}', '${{chat.username || ''}}', '${{chat.type}}')" class="btn btn-primary" id="loggingBtn_${{chat.id}}">
+                                                📝 Metti sotto log
+                                            </button>
+                                            <button onclick="viewLogs(${{chat.id}})" class="btn btn-info" style="margin-left: 10px;" id="viewLogsBtn_${{chat.id}}">
+                                                📋 Vedi Log
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        `).join('')}}
+                    </div>
+                ` : ''}}
             `;
         }}
         
@@ -1687,6 +1794,119 @@ def chats_list():
                     <a href="/dashboard" class="btn btn-primary">🔄 Riattiva Sessione</a>
                 </div>
             `;
+        }}
+        
+        async function toggleLogging(chatId, chatTitle, chatUsername, chatType) {{
+            const button = document.getElementById(`loggingBtn_${{chatId}}`);
+            const originalText = button.innerHTML;
+            
+            try {{
+                // Check current logging status
+                const statusResult = await makeRequest(`/api/logging/chat/${{chatId}}/status`, {{
+                    method: 'GET'
+                }});
+                
+                if (statusResult.success) {{
+                    if (statusResult.has_active_session) {{
+                        // Stop logging
+                        if (confirm(`Sei sicuro di voler fermare il logging per "${{chatTitle}}"?`)) {{
+                            button.innerHTML = '⏹️ Fermando...';
+                            button.disabled = true;
+                            
+                            const stopResult = await makeRequest(`/api/logging/sessions/${{statusResult.session.id}}/stop`, {{
+                                method: 'POST'
+                            }});
+                            
+                            if (stopResult.success) {{
+                                button.innerHTML = '📝 Metti sotto log';
+                                button.className = 'btn btn-primary';
+                                showMessage('Logging fermato con successo', 'success');
+                                // Rerender per aggiornare il raggruppamento
+                                renderChats();
+                            }} else {{
+                                button.innerHTML = originalText;
+                                showMessage(stopResult.error || 'Errore nel fermare il logging', 'error');
+                            }}
+                        }}
+                    }} else {{
+                        // Start logging
+                        if (confirm(`Sei sicuro di voler iniziare il logging per "${{chatTitle}}"?`)) {{
+                            button.innerHTML = '🔄 Avviando...';
+                            button.disabled = true;
+                            
+                            const startResult = await makeRequest('/api/logging/sessions', {{
+                                method: 'POST',
+                                body: JSON.stringify({{
+                                    chat_id: chatId,
+                                    chat_title: chatTitle,
+                                    chat_username: chatUsername,
+                                    chat_type: chatType
+                                }})
+                            }});
+                            
+                            if (startResult.success) {{
+                                button.innerHTML = '⏹️ Ferma Logging';
+                                button.className = 'btn btn-danger';
+                                showMessage('Logging avviato con successo', 'success');
+                                // Rerender per aggiornare il raggruppamento
+                                renderChats();
+                            }} else {{
+                                button.innerHTML = originalText;
+                                showMessage(startResult.error || 'Errore nell\'avviare il logging', 'error');
+                            }}
+                        }}
+                    }}
+                }} else {{
+                    showMessage(statusResult.error || 'Errore nel controllare lo stato del logging', 'error');
+                }}
+            }} catch (error) {{
+                button.innerHTML = originalText;
+                button.disabled = false;
+                showMessage('Errore di connessione', 'error');
+            }}
+            
+            button.disabled = false;
+        }}
+        
+        // Update button states on page load
+        async function updateLoggingButtonStates() {{
+            for (const chat of allChats) {{
+                try {{
+                    const statusResult = await makeRequest(`/api/logging/chat/${{chat.id}}/status`, {{
+                        method: 'GET'
+                    }});
+                    
+                    if (statusResult.success && statusResult.has_active_session) {{
+                        const button = document.getElementById(`loggingBtn_${{chat.id}}`);
+                        if (button) {{
+                            button.innerHTML = '⏹️ Ferma Logging';
+                            button.className = 'btn btn-danger';
+                        }}
+                    }}
+                }} catch (error) {{
+                    // Ignore errors for button state updates
+                }}
+            }}
+            
+            // Rerender chats to apply grouping after button states are updated
+            renderChats();
+        }}
+        
+        async function viewLogs(chatId) {{
+            try {{
+                const statusResult = await makeRequest(`/api/logging/chat/${{chatId}}/status`, {{
+                    method: 'GET'
+                }});
+                
+                if (statusResult.success && statusResult.session) {{
+                    // Redirect to logs page
+                    window.location.href = `/message-logs/${{statusResult.session.id}}`;
+                }} else {{
+                    showMessage('Nessuna sessione di logging attiva per questa chat', 'warning');
+                }}
+            }} catch (error) {{
+                showMessage('Errore nel controllare lo stato del logging', 'error');
+            }}
         }}
     </script>
     """
@@ -3435,7 +3655,7 @@ def message_manager():
 @app.route('/message-elaborations/<int:listener_id>')
 @require_auth
 def message_elaborations(listener_id):
-    """Pagina gestione elaborazioni per un listener"""
+    """Pagina elaborazioni messaggi (protetta)"""
     
     # Use unified menu
     menu_html = get_unified_menu('message-manager')
@@ -3443,94 +3663,24 @@ def message_elaborations(listener_id):
     content = f"""
     {menu_html}
     
-    <h2>🔧 Gestione Elaborazioni</h2>
-    <p><a href="/message-manager">← Torna a Gestione Messaggi</a></p>
+    <h2>🔧 Elaborazioni Messaggi</h2>
     
-    <div class="card" style="margin-bottom: 20px;">
-        <h3 id="listenerTitle">Caricamento...</h3>
-        <p><strong>ID Listener:</strong> {listener_id}</p>
-        <p id="listenerStats"></p>
+    <div class="status info">
+        ℹ️ Configura le elaborazioni per il listener selezionato
     </div>
     
-    <div class="loading">
-        <div class="spinner"></div>
-        <p>Caricamento elaborazioni...</p>
-    </div>
-    
-    <div id="elaborationsContainer" style="display: none;">
-        <div style="margin-bottom: 20px;">
-            <button onclick="showNewElaborationForm()" class="btn btn-success">
-                ➕ Aggiungi elaborazione
-            </button>
-        </div>
-        
-        <div id="newElaborationForm" style="display: none; margin-bottom: 20px;" class="card">
-            <h3>➕ Nuova Elaborazione</h3>
-            <form onsubmit="createElaboration(event)">
-                <div class="form-group">
-                    <label>Tipo elaborazione</label>
-                    <select id="elaborationType" name="elaborationType" required onchange="updateElaborationForm()">
-                        <option value="">Seleziona...</option>
-                        <option value="extractor">🔍 Extractor - Estrai dati dai messaggi</option>
-                        <option value="redirect">🔄 Redirect - Inoltra a un'altra chat</option>
-                    </select>
-                </div>
-                
-                <div id="elaborationConfig" style="display: none;">
-                    <!-- Dynamic content based on type -->
-                </div>
-                
-                <div class="form-actions" style="display: none;" id="formActions">
-                    <button type="submit" class="btn btn-primary">✅ Crea elaborazione</button>
-                    <button type="button" onclick="hideNewElaborationForm()" class="btn">❌ Annulla</button>
-                </div>
-            </form>
-        </div>
-        
-        <div id="elaborationsList"></div>
-    </div>
-    
-    <div id="errorContainer" style="display: none;">
-        <div class="status error">
-            <h3>❌ Errore</h3>
-            <p id="errorMessage"></p>
+    <div id="elaborationsContainer">
+        <div class="loading">
+            <div class="spinner"></div>
+            <p>Caricamento elaborazioni...</p>
         </div>
     </div>
     
     <script>
         const listenerId = {listener_id};
-        let listener = null;
-        let elaborations = [];
-        let availableChats = [];
         
-        document.addEventListener('DOMContentLoaded', async () => {{
-            await loadListener();
-            await loadElaborations();
-            await loadAvailableChats();
-        }});
-        
-        async function loadListener() {{
-            try {{
-                const result = await makeRequest('/api/message-listeners', {{
-                    method: 'GET'
-                }});
-                
-                if (result.success) {{
-                    listener = result.listeners.find(l => l.id === listenerId);
-                    if (listener) {{
-                        document.getElementById('listenerTitle').innerHTML = `
-                            📡 Listener: ${{escapeHtml(listener.source_chat_title)}}
-                        `;
-                        document.getElementById('listenerStats').innerHTML = `
-                            <strong>Messaggi ricevuti:</strong> ${{listener.messages_received || 0}} |
-                            <strong>Stato:</strong> <span class="${{listener.container_status === 'running' ? 'text-success' : 'text-danger'}}">${{listener.container_status}}</span>
-                        `;
-                    }}
-                }}
-            }} catch (error) {{
-                console.error('Error loading listener:', error);
-            }}
-        }}
+        // Carica le elaborazioni all'avvio
+        document.addEventListener('DOMContentLoaded', loadElaborations);
         
         async function loadElaborations() {{
             showLoading();
@@ -3543,9 +3693,7 @@ def message_elaborations(listener_id):
                 hideLoading();
                 
                 if (result.success) {{
-                    elaborations = result.elaborations;
-                    document.getElementById('elaborationsContainer').style.display = 'block';
-                    renderElaborations();
+                    renderElaborations(result.elaborations);
                 }} else {{
                     showError(result.error || 'Errore durante il caricamento elaborazioni');
                 }}
@@ -3555,28 +3703,14 @@ def message_elaborations(listener_id):
             }}
         }}
         
-        async function loadAvailableChats() {{
-            try {{
-                const result = await makeRequest('/api/telegram/get-chats', {{
-                    method: 'GET'
-                }});
-                
-                if (result.success) {{
-                    availableChats = result.chats;
-                }}
-            }} catch (error) {{
-                console.error('Error loading chats:', error);
-            }}
-        }}
-        
-        function renderElaborations() {{
-            const container = document.getElementById('elaborationsList');
+        function renderElaborations(elaborations) {{
+            const container = document.getElementById('elaborationsContainer');
             
             if (elaborations.length === 0) {{
                 container.innerHTML = `
-                    <div class="status info">
-                        <p>📭 Nessuna elaborazione configurata</p>
-                        <p>Clicca su "Aggiungi elaborazione" per iniziare</p>
+                    <div class="status warning">
+                        <p>📝 Nessuna elaborazione configurata</p>
+                        <p>Crea la tua prima elaborazione per iniziare a processare i messaggi</p>
                     </div>
                 `;
                 return;
@@ -3591,16 +3725,20 @@ def message_elaborations(listener_id):
                     <div class="card" style="margin-bottom: 15px;">
                         <div style="display: flex; justify-content: space-between; align-items: start;">
                             <div style="flex: 1;">
-                                <h4>${{getElaborationIcon(elab.elaboration_type)}} ${{escapeHtml(elab.elaboration_name)}}</h4>
+                                <h3>${{escapeHtml(elab.name)}} ${{getElaborationIcon(elab.elaboration_type)}}</h3>
                                 <p><strong>Tipo:</strong> ${{getElaborationTypeLabel(elab.elaboration_type)}}</p>
-                                <p><strong>Stato:</strong> <span class="${{elab.is_active ? 'text-success' : 'text-danger'}}">${{elab.is_active ? '✅ Attivo' : '❌ Disattivo'}}</span></p>
-                                <p><strong>Messaggi processati:</strong> ${{elab.processed_count || 0}}</p>
-                                ${{elab.error_count > 0 ? `<p class="text-danger"><strong>Errori:</strong> ${{elab.error_count}}</p>` : ''}}
-                                
-                                ${{renderElaborationConfig(elab)}}
+                                <p><strong>Priorità:</strong> ${{elab.priority}}</p>
+                                <p><strong>Stato:</strong> 
+                                    <span class="badge ${{elab.is_active ? 'badge-success' : 'badge-warning'}}">
+                                        ${{elab.is_active ? 'Attiva' : 'Inattiva'}}
+                                    </span>
+                                </p>
+                                ${{elab.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(elab.description)}}</p>` : ''}}
+                                <p><strong>Creata:</strong> ${{new Date(elab.created_at).toLocaleDateString('it-IT')}}</p>
                                 
                                 <div style="margin-top: 15px;">
-                                    <button onclick="toggleElaboration(${{elab.id}}, ${{elab.is_active}})" class="btn ${{elab.is_active ? 'btn-warning' : 'btn-success'}}">
+                                    <button onclick="toggleElaboration(${{elab.id}}, ${{elab.is_active}})" 
+                                            class="btn ${{elab.is_active ? 'btn-warning' : 'btn-success'}}">
                                         ${{elab.is_active ? '⏸️ Disattiva' : '▶️ Attiva'}}
                                     </button>
                                     <button onclick="deleteElaboration(${{elab.id}})" class="btn btn-danger" style="margin-left: 10px;">
@@ -3614,261 +3752,41 @@ def message_elaborations(listener_id):
             `;
         }}
         
-        function renderElaborationConfig(elab) {{
-            const config = elab.config || {{}};
-            
-            if (elab.elaboration_type === 'extractor') {{
-                const rules = config.rules || [];
-                return `
-                    <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 5px;">
-                        <strong>Regole di estrazione:</strong>
-                        <ul>
-                            ${{rules.map(rule => `
-                                <li>
-                                    <strong>${{escapeHtml(rule.rule_name)}}:</strong> 
-                                    Cerca "${{escapeHtml(rule.search_text)}}" e estrai ${{rule.value_length}} caratteri
-                                </li>
-                            `).join('')}}
-                        </ul>
-                    </div>
-                `;
-            }} else if (elab.elaboration_type === 'redirect') {{
-                return `
-                    <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 5px;">
-                        <p><strong>Destinazione:</strong> ${{escapeHtml(config.target_name || config.target_id)}}</p>
-                        <p><strong>Tipo:</strong> ${{config.target_type}}</p>
-                    </div>
-                `;
-            }}
-            
-            return '';
-        }}
-        
-        function showNewElaborationForm() {{
-            document.getElementById('newElaborationForm').style.display = 'block';
-        }}
-        
-        function hideNewElaborationForm() {{
-            document.getElementById('newElaborationForm').style.display = 'none';
-            document.getElementById('elaborationType').value = '';
-            document.getElementById('elaborationConfig').innerHTML = '';
-            document.getElementById('elaborationConfig').style.display = 'none';
-            document.getElementById('formActions').style.display = 'none';
-        }}
-        
-        function updateElaborationForm() {{
-            const type = document.getElementById('elaborationType').value;
-            const configDiv = document.getElementById('elaborationConfig');
-            const formActions = document.getElementById('formActions');
-            
-            if (!type) {{
-                configDiv.style.display = 'none';
-                formActions.style.display = 'none';
-                return;
-            }}
-            
-            configDiv.style.display = 'block';
-            formActions.style.display = 'block';
-            
-            if (type === 'extractor') {{
-                configDiv.innerHTML = `
-                    <h4>Regole di estrazione</h4>
-                    <div id="extractorRules">
-                        <div class="rule-row" data-rule-index="0">
-                            <div class="form-group">
-                                <label>Nome regola</label>
-                                <input type="text" name="rule_name[]" class="form-control" placeholder="es. token_address" required>
-                            </div>
-                            <div class="form-group">
-                                <label>Testo da cercare</label>
-                                <input type="text" name="search_text[]" class="form-control" placeholder="es. Address: " required>
-                            </div>
-                            <div class="form-group">
-                                <label>Lunghezza valore da estrarre</label>
-                                <input type="number" name="value_length[]" class="form-control" placeholder="44" min="1" required>
-                            </div>
-                            <button type="button" class="btn btn-danger btn-sm" onclick="removeRule(0)">🗑️ Rimuovi</button>
-                        </div>
-                    </div>
-                    <button type="button" class="btn btn-success btn-sm" onclick="addRule()">➕ Aggiungi regola</button>
-                `;
-            }} else if (type === 'redirect') {{
-                // Check if redirect already exists
-                const hasRedirect = elaborations.some(e => e.elaboration_type === 'redirect');
-                if (hasRedirect) {{
-                    configDiv.innerHTML = `
-                        <div class="status error">
-                            <p>⚠️ È già presente un redirect per questo listener</p>
-                            <p>Puoi avere solo un redirect per chat</p>
-                        </div>
-                    `;
-                    formActions.style.display = 'none';
-                    return;
-                }}
-                
-                configDiv.innerHTML = `
-                    <h4>Destinazione redirect</h4>
-                    <div class="form-group">
-                        <label>Tipo destinazione</label>
-                        <select name="target_type" required onchange="updateTargetOptions()">
-                            <option value="">Seleziona...</option>
-                            <option value="user">👤 Utente</option>
-                            <option value="group">👥 Gruppo</option>
-                            <option value="channel">📢 Canale</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Seleziona destinazione</label>
-                        <select name="target_id" required>
-                            <option value="">Prima seleziona il tipo</option>
-                        </select>
-                    </div>
-                `;
+        function getElaborationIcon(type) {{
+            switch(type) {{
+                case 'filter': return '🔍';
+                case 'transform': return '🔄';
+                case 'notification': return '🔔';
+                case 'storage': return '💾';
+                default: return '⚙️';
             }}
         }}
         
-        let ruleIndex = 1;
-        function addRule() {{
-            const rulesDiv = document.getElementById('extractorRules');
-            const newRule = document.createElement('div');
-            newRule.className = 'rule-row';
-            newRule.setAttribute('data-rule-index', ruleIndex);
-            newRule.innerHTML = `
-                <div class="form-group">
-                    <label>Nome regola</label>
-                    <input type="text" name="rule_name[]" class="form-control" placeholder="es. token_address" required>
-                </div>
-                <div class="form-group">
-                    <label>Testo da cercare</label>
-                    <input type="text" name="search_text[]" class="form-control" placeholder="es. Address: " required>
-                </div>
-                <div class="form-group">
-                    <label>Lunghezza valore da estrarre</label>
-                    <input type="number" name="value_length[]" class="form-control" placeholder="44" min="1" required>
-                </div>
-                <button type="button" class="btn btn-danger btn-sm" onclick="removeRule(${{ruleIndex}})">🗑️ Rimuovi</button>
-            `;
-            rulesDiv.appendChild(newRule);
-            ruleIndex++;
-        }}
-        
-        function removeRule(index) {{
-            const rule = document.querySelector(`[data-rule-index="${{index}}"]`);
-            if (rule) {{
-                rule.remove();
-            }}
-        }}
-        
-        function updateTargetOptions() {{
-            const targetType = document.querySelector('select[name="target_type"]').value;
-            const targetSelect = document.querySelector('select[name="target_id"]');
-            
-            if (!targetType) {{
-                targetSelect.innerHTML = '<option value="">Prima seleziona il tipo</option>';
-                return;
-            }}
-            
-            // Filter chats based on type
-            const filteredChats = availableChats.filter(chat => {{
-                if (targetType === 'user') return chat.type === 'private';
-                if (targetType === 'group') return chat.type === 'group' || chat.type === 'supergroup';
-                if (targetType === 'channel') return chat.type === 'channel';
-                return false;
-            }});
-            
-            targetSelect.innerHTML = `
-                <option value="">Seleziona...</option>
-                ${{filteredChats.map(chat => `
-                    <option value="${{chat.id}}" data-name="${{escapeHtml(chat.title)}}">
-                        ${{escapeHtml(chat.title)}} ${{chat.username ? `(@${{chat.username}})` : ''}}
-                    </option>
-                `).join('')}}
-            `;
-        }}
-        
-        async function createElaboration(event) {{
-            event.preventDefault();
-            
-            const type = document.getElementById('elaborationType').value;
-            let config = {{}};
-            let name = '';
-            
-            if (type === 'extractor') {{
-                // Collect rules
-                const rules = [];
-                const ruleRows = document.querySelectorAll('.rule-row');
-                
-                ruleRows.forEach(row => {{
-                    const ruleName = row.querySelector('input[name="rule_name[]"]').value;
-                    const searchText = row.querySelector('input[name="search_text[]"]').value;
-                    const valueLength = parseInt(row.querySelector('input[name="value_length[]"]').value);
-                    
-                    rules.push({{
-                        rule_name: ruleName,
-                        search_text: searchText,
-                        value_length: valueLength
-                    }});
-                }});
-                
-                config = {{ rules }};
-                name = `Extractor con ${{rules.length}} regole`;
-                
-            }} else if (type === 'redirect') {{
-                const targetType = document.querySelector('select[name="target_type"]').value;
-                const targetSelect = document.querySelector('select[name="target_id"]');
-                const targetId = targetSelect.value;
-                const targetName = targetSelect.selectedOptions[0]?.getAttribute('data-name') || targetId;
-                
-                config = {{
-                    target_type: targetType,
-                    target_id: targetId,
-                    target_name: targetName
-                }};
-                name = `Redirect verso ${{targetName}}`;
-            }}
-            
-            showMessage('Creazione elaborazione...', 'info');
-            
-            try {{
-                const result = await makeRequest(`/api/message-listeners/${{listenerId}}/elaborations`, {{
-                    method: 'POST',
-                    body: JSON.stringify({{
-                        elaboration_type: type,
-                        elaboration_name: name,
-                        config: config
-                    }})
-                }});
-                
-                if (result.success) {{
-                    showMessage('✅ Elaborazione creata con successo!', 'success');
-                    hideNewElaborationForm();
-                    await loadElaborations();
-                }} else {{
-                    showMessage(`❌ Errore: ${{result.error}}`, 'error');
-                }}
-            }} catch (error) {{
-                console.error('Error creating elaboration:', error);
-                showMessage('❌ Errore di connessione', 'error');
+        function getElaborationTypeLabel(type) {{
+            switch(type) {{
+                case 'filter': return 'Filtro';
+                case 'transform': return 'Trasformazione';
+                case 'notification': return 'Notifica';
+                case 'storage': return 'Archiviazione';
+                default: return type;
             }}
         }}
         
         async function toggleElaboration(elaborationId, isActive) {{
-            const action = isActive ? 'deactivate' : 'activate';
-            
             try {{
-                const result = await makeRequest(`/api/elaborations/${{elaborationId}}/${{action}}`, {{
+                const endpoint = isActive ? 'deactivate' : 'activate';
+                const result = await makeRequest(`/api/elaborations/${{elaborationId}}/${{endpoint}}`, {{
                     method: 'POST'
                 }});
                 
                 if (result.success) {{
-                    showMessage(`✅ Elaborazione ${{isActive ? 'disattivata' : 'attivata'}} con successo!`, 'success');
-                    await loadElaborations();
+                    showMessage(`Elaborazione ${{isActive ? 'disattivata' : 'attivata'}} con successo`, 'success');
+                    loadElaborations(); // Reload to update UI
                 }} else {{
-                    showMessage(`❌ Errore: ${{result.error}}`, 'error');
+                    showMessage(result.error || 'Errore nell\'aggiornamento', 'error');
                 }}
             }} catch (error) {{
-                console.error('Error toggling elaboration:', error);
-                showMessage('❌ Errore di connessione', 'error');
+                showMessage('Errore di connessione', 'error');
             }}
         }}
         
@@ -3883,30 +3801,13 @@ def message_elaborations(listener_id):
                 }});
                 
                 if (result.success) {{
-                    showMessage('✅ Elaborazione eliminata con successo!', 'success');
-                    await loadElaborations();
+                    showMessage('Elaborazione eliminata con successo', 'success');
+                    loadElaborations(); // Reload to update UI
                 }} else {{
-                    showMessage(`❌ Errore: ${{result.error}}`, 'error');
+                    showMessage(result.error || 'Errore nell\'eliminazione', 'error');
                 }}
             }} catch (error) {{
-                console.error('Error deleting elaboration:', error);
-                showMessage('❌ Errore di connessione', 'error');
-            }}
-        }}
-        
-        function getElaborationIcon(type) {{
-            switch(type) {{
-                case 'extractor': return '🔍';
-                case 'redirect': return '🔄';
-                default: return '🔧';
-            }}
-        }}
-        
-        function getElaborationTypeLabel(type) {{
-            switch(type) {{
-                case 'extractor': return 'Estrazione dati';
-                case 'redirect': return 'Reindirizzamento';
-                default: return type;
+                showMessage('Errore di connessione', 'error');
             }}
         }}
         
@@ -3917,37 +3818,178 @@ def message_elaborations(listener_id):
         }}
         
         function showError(message) {{
-            document.getElementById('errorMessage').textContent = message;
-            document.getElementById('errorContainer').style.display = 'block';
-            document.getElementById('elaborationsContainer').style.display = 'none';
-        }}
-        
-        function showLoading() {{
-            document.querySelector('.loading').style.display = 'block';
-        }}
-        
-        function hideLoading() {{
-            document.querySelector('.loading').style.display = 'none';
-        }}
-        
-        function showMessage(message, type = 'info') {{
-            const statusDiv = document.createElement('div');
-            statusDiv.className = `status ${{type}}`;
-            statusDiv.innerHTML = message;
-            
-            const container = document.querySelector('.content') || document.body;
-            container.insertBefore(statusDiv, container.firstChild);
-            
-            setTimeout(() => statusDiv.remove(), 5000);
+            document.getElementById('elaborationsContainer').innerHTML = `
+                <div class="status error">
+                    <h3>❌ Errore</h3>
+                    <p>${{message}}</p>
+                </div>
+            `;
         }}
     </script>
     """
     
     return render_template_string(
         BASE_TEMPLATE,
-        title="Gestione Elaborazioni",
-        subtitle=f"Listener ID: {listener_id}",
-        content=Markup(content)
+        title="Elaborazioni Messaggi",
+        subtitle="Gestione elaborazioni listener",
+        content=Markup(content),
+        menu_html=Markup(menu_html),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
+    )
+
+@app.route('/message-logs/<int:session_id>')
+@require_auth
+def message_logs(session_id):
+    """Pagina log messaggi (protetta)"""
+    
+    # Use unified menu
+    menu_html = get_unified_menu('chats')
+    
+    content = f"""
+    {menu_html}
+    
+    <h2>📝 Log Messaggi</h2>
+    
+    <div class="status info">
+        ℹ️ Visualizza tutti i messaggi loggati per questa sessione
+    </div>
+    
+    <div id="logsContainer">
+        <div class="loading">
+            <div class="spinner"></div>
+            <p>Caricamento messaggi...</p>
+        </div>
+    </div>
+    
+    <script>
+        const sessionId = {session_id};
+        let currentPage = 1;
+        let totalPages = 1;
+        
+        // Carica i messaggi all'avvio
+        document.addEventListener('DOMContentLoaded', loadMessages);
+        
+        async function loadMessages(page = 1) {{
+            showLoading();
+            
+            try {{
+                const result = await makeRequest(`/api/logging/messages/${{sessionId}}?page=${{page}}&per_page=50`, {{
+                    method: 'GET'
+                }});
+                
+                hideLoading();
+                
+                if (result.success) {{
+                    renderMessages(result.messages, result.pagination);
+                }} else {{
+                    showError(result.error || 'Errore durante il caricamento messaggi');
+                }}
+            }} catch (error) {{
+                hideLoading();
+                showError('Errore di connessione');
+            }}
+        }}
+        
+        function renderMessages(messages, pagination) {{
+            const container = document.getElementById('logsContainer');
+            currentPage = pagination.page;
+            totalPages = pagination.pages;
+            
+            if (messages.length === 0) {{
+                container.innerHTML = `
+                    <div class="status warning">
+                        <p>📝 Nessun messaggio loggato ancora</p>
+                        <p>I messaggi appariranno qui quando verranno ricevuti</p>
+                    </div>
+                `;
+                return;
+            }}
+            
+            container.innerHTML = `
+                <div style="margin-bottom: 20px;">
+                    <strong>📊 ${{pagination.total}} messaggi totali (pagina ${{pagination.page}} di ${{pagination.pages}})</strong>
+                </div>
+                
+                ${{messages.map(msg => `
+                    <div class="card" style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div style="flex: 1;">
+                                <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                                    <h4 style="margin: 0; margin-right: 10px;">${{getMessageIcon(msg.message_type)}} Messaggio #${{msg.message_id}}</h4>
+                                    <span class="badge badge-info">${{msg.message_type || 'text'}}</span>
+                                </div>
+                                
+                                <p><strong>Mittente:</strong> ${{escapeHtml(msg.sender_name || 'Sconosciuto')}}</p>
+                                ${{msg.sender_username ? `<p><strong>Username:</strong> @${{msg.sender_username}}</p>` : ''}}
+                                <p><strong>Data:</strong> ${{new Date(msg.message_date).toLocaleString('it-IT')}}</p>
+                                <p><strong>Loggato:</strong> ${{new Date(msg.logged_at).toLocaleString('it-IT')}}</p>
+                                
+                                ${{msg.message_text ? `
+                                    <div style="margin-top: 10px; padding: 10px; background: #f8f9fa; border-radius: 4px; border-left: 4px solid #007bff;">
+                                        <strong>Testo:</strong><br>
+                                        ${{escapeHtml(msg.message_text)}}
+                                    </div>
+                                ` : ''}}
+                                
+                                ${{msg.media_file_id ? `
+                                    <p style="margin-top: 10px;"><strong>Media:</strong> ${{msg.media_file_id}}</p>
+                                ` : ''}}
+                            </div>
+                        </div>
+                    </div>
+                `).join('')}}
+                
+                ${{pagination.pages > 1 ? `
+                    <div style="margin-top: 30px; text-align: center;">
+                        <div class="pagination">
+                            ${{currentPage > 1 ? `<button onclick="loadMessages(${{currentPage - 1}})" class="btn">← Precedente</button>` : ''}}
+                            <span style="margin: 0 15px;">Pagina ${{currentPage}} di ${{pagination.pages}}</span>
+                            ${{currentPage < pagination.pages ? `<button onclick="loadMessages(${{currentPage + 1}})" class="btn">Successiva →</button>` : ''}}
+                        </div>
+                    </div>
+                ` : ''}}
+            `;
+        }}
+        
+        function getMessageIcon(type) {{
+            switch(type) {{
+                case 'photo': return '📷';
+                case 'video': return '🎥';
+                case 'document': return '📄';
+                case 'sticker': return '😀';
+                case 'voice': return '🎤';
+                case 'audio': return '🎵';
+                default: return '💬';
+            }}
+        }}
+        
+        function escapeHtml(text) {{
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }}
+        
+        function showError(message) {{
+            document.getElementById('logsContainer').innerHTML = `
+                <div class="status error">
+                    <h3>❌ Errore</h3>
+                    <p>${{message}}</p>
+                </div>
+            `;
+        }}
+    </script>
+    """
+    
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Log Messaggi",
+        subtitle="Visualizzazione messaggi loggati",
+        content=Markup(content),
+        menu_html=Markup(menu_html),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
     )
 
 @app.route('/crypto-configurator')
@@ -4684,6 +4726,233 @@ def proxy_delete_crypto_rule(rule_id):
         return jsonify(response), 200
     else:
         return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/chats-backup')
+@require_auth
+def chats_backup():
+    """Pagina backup vecchie funzionalità chat (protetta)"""
+    
+    # Use unified menu
+    menu_html = get_unified_menu('chats')
+    
+    content = f"""
+    {menu_html}
+    
+    <h2>💬 Le mie Chat Telegram (Backup)</h2>
+    
+    <div class="status warning">
+        ⚠️ Questa è la versione di backup delle vecchie funzionalità chat. 
+        Per il logging dei messaggi, usa la pagina principale "Logging Messaggi".
+    </div>
+    
+    <div class="status info">
+        ℹ️ Tutte le tue chat con ID e dettagli - clicca sui bottoni per copiare
+    </div>
+    
+    <div class="loading">
+        <div class="spinner"></div>
+        <p>Caricamento chat...</p>
+    </div>
+    
+    <div id="chatsContainer" style="display: none;">
+        <div style="margin-bottom: 30px; padding: 20px; border: 1px solid #dee2e6; border-radius: 8px; background: #f8f9fa;">
+            <h3>🔍 Filtra chat</h3>
+            <div class="form-group">
+                <input type="text" id="searchFilter" placeholder="Cerca per nome, ID o username..." 
+                       style="width: 100%; padding: 10px; border: 1px solid #ced4da; border-radius: 4px;">
+                <small>Ricerca in tempo reale - prova "ROS" per trovare "Rossetto"</small>
+            </div>
+        </div>
+        
+        <div id="chatsList"></div>
+    </div>
+    
+    <div id="errorContainer" style="display: none;">
+        <div class="status error">
+            <h3>❌ Errore</h3>
+            <p id="errorMessage"></p>
+        </div>
+    </div>
+    
+    <script>
+        let allChats = [];
+        let filteredChats = [];
+        
+        // Carica le chat all'avvio
+        document.addEventListener('DOMContentLoaded', loadChats);
+        
+        async function loadChats() {{
+            showLoading();
+            
+            try {{
+                const result = await makeRequest('/api/telegram/get-chats', {{
+                    method: 'GET'
+                }});
+                
+                hideLoading();
+                
+                if (result.success) {{
+                    allChats = result.chats;
+                    filteredChats = [...allChats];
+                    
+                    // Salva le chat in sessionStorage per la navigazione
+                    sessionStorage.setItem('userChats', JSON.stringify(allChats));
+                    
+                    renderChats();
+                    
+                    document.getElementById('chatsContainer').style.display = 'block';
+                    
+                    // Setup filtro di ricerca
+                    document.getElementById('searchFilter').addEventListener('input', filterChats);
+                    
+                }} else {{
+                    // Controlla se è un errore di autorizzazione persa
+                    if (result.error && result.error.includes('Authorization lost')) {{
+                        showReactivationPrompt();
+                    }} else {{
+                        showError(result.error || 'Errore durante il caricamento chat');
+                    }}
+                }}
+            }} catch (error) {{
+                hideLoading();
+                showError('Errore di connessione');
+            }}
+        }}
+        
+        function renderChats() {{
+            const container = document.getElementById('chatsList');
+            
+            if (filteredChats.length === 0) {{
+                container.innerHTML = `
+                    <div class="status warning">
+                        <p>🔍 Nessuna chat trovata con i criteri di ricerca</p>
+                    </div>
+                `;
+                return;
+            }}
+            
+            container.innerHTML = `
+                <div style="margin-bottom: 20px;">
+                    <strong>📊 ${{filteredChats.length}} chat trovate (su ${{allChats.length}} totali)</strong>
+                </div>
+                
+                ${{filteredChats.map(chat => `
+                    <div class="card" style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: between; align-items: start;">
+                            <div style="flex: 1;">
+                                <h3>${{escapeHtml(chat.title)}} ${{getChatIcon(chat.type)}}</h3>
+                                <p><strong>ID:</strong> 
+                                    <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${{chat.id}}</code>
+                                    <button onclick="copyToClipboard('${{chat.id}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
+                                </p>
+                                <p><strong>Tipo:</strong> ${{getChatTypeLabel(chat.type)}}</p>
+                                ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}} 
+                                    <button onclick="copyToClipboard('@${{chat.username}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
+                                </p>` : ''}}
+                                ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
+                                ${{chat.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(chat.description.substring(0, 100))}}${{chat.description.length > 100 ? '...' : ''}}</p>` : ''}}
+                                ${{chat.unread_count ? `<p><strong>Non letti:</strong> ${{chat.unread_count}} messaggi</p>` : ''}}
+                                ${{chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(chat.last_message_date).toLocaleDateString('it-IT')}}</p>` : ''}}
+                                
+                                <div style="margin-top: 15px;">
+                                    <a href="/forwarders/${{chat.id}}" class="btn btn-primary">
+                                        🔄 Vedi inoltri
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('')}}
+            `;
+        }}
+        
+        function filterChats() {{
+            const query = document.getElementById('searchFilter').value.toLowerCase().trim();
+            
+            if (!query) {{
+                filteredChats = [...allChats];
+            }} else {{
+                filteredChats = allChats.filter(chat => 
+                    chat.title.toLowerCase().includes(query) ||
+                    chat.id.toString().includes(query) ||
+                    (chat.username && chat.username.toLowerCase().includes(query)) ||
+                    (chat.description && chat.description.toLowerCase().includes(query))
+                );
+            }}
+            
+            renderChats();
+        }}
+        
+        function copyToClipboard(text) {{
+            navigator.clipboard.writeText(text).then(() => {{
+                showMessage(`Copiato: ${{text}}`, 'success');
+            }}).catch(() => {{
+                // Fallback per browser più vecchi
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                showMessage(`Copiato: ${{text}}`, 'success');
+            }});
+        }}
+        
+        function getChatIcon(type) {{
+            switch(type) {{
+                case 'private': return '👤';
+                case 'group': return '👥';
+                case 'supergroup': return '👥';
+                case 'channel': return '📢';
+                default: return '💬';
+            }}
+        }}
+        
+        function getChatTypeLabel(type) {{
+            switch(type) {{
+                case 'private': return 'Chat privata';
+                case 'group': return 'Gruppo';
+                case 'supergroup': return 'Supergruppo';
+                case 'channel': return 'Canale';
+                default: return type;
+            }}
+        }}
+        
+        function escapeHtml(text) {{
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }}
+        
+        function showError(message) {{
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('errorContainer').style.display = 'block';
+            document.getElementById('chatsContainer').style.display = 'none';
+        }}
+        
+        function showReactivationPrompt() {{
+            document.getElementById('errorContainer').style.display = 'block';
+            document.getElementById('errorMessage').innerHTML = `
+                <div style="text-align: center; padding: 20px;">
+                    <h3>🔐 Sessione Telegram scaduta</h3>
+                    <p>La tua sessione Telegram è scaduta. Devi riattivarla per continuare.</p>
+                    <br>
+                    <a href="/dashboard" class="btn btn-primary">🔄 Riattiva Sessione</a>
+                </div>
+            `;
+        }}
+    </script>
+    """
+    
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Le mie Chat (Backup)",
+        subtitle="Vecchie funzionalità chat - Backup",
+        content=Markup(content),
+        menu_html=Markup(menu_html),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
+    )
 
 if __name__ == '__main__':
     logger.info("🌐 Starting Telegram Chat Manager Frontend")
