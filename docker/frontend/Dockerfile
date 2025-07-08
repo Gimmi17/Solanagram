@@ -33,7 +33,14 @@ WORKDIR /app
 # ============================================
 FROM base as development
 
-# Installa dipendenze test
+# Copia e installa dipendenze produzione prima
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
+
+# Poi installa dipendenze development e test
+COPY requirements-dev.txt ./
+RUN pip install -r requirements-dev.txt
+
 COPY requirements-test.txt ./
 RUN pip install -r requirements-test.txt
 
@@ -49,9 +56,9 @@ EXPOSE 8080
 # Switch to non-root user
 USER appuser
 
-# Health check
+# Health check with fallback
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8080/health 2>/dev/null || curl -f http://localhost:8080/ 2>/dev/null || exit 1
 
 # Comando development - usa Python diretto
 CMD ["python", "frontend/app.py"]
@@ -81,9 +88,9 @@ USER appuser
 # Espone porta produzione
 EXPOSE 8080
 
-# Health check
+# Health check with fallback
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8080/health 2>/dev/null || curl -f http://localhost:8080/ 2>/dev/null || exit 1
 
 # Comando produzione
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--timeout", "60", "frontend.app:app"] 

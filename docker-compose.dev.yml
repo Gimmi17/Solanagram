@@ -25,9 +25,9 @@ services:
     container_name: solanagram-postgres-dev
     restart: unless-stopped
     environment:
-      POSTGRES_DB: chatmanager
-      POSTGRES_USER: chatmanager
-      POSTGRES_PASSWORD: chatmanager_password
+      POSTGRES_DB: solanagram_db
+      POSTGRES_USER: solanagram_user
+      POSTGRES_PASSWORD: solanagram_password
       POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
     ports:
       - "5432:5432"
@@ -37,7 +37,7 @@ services:
     networks:
       - telegram-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U chatmanager -d chatmanager"]
+      test: ["CMD-SHELL", "pg_isready -U solanagram_user -d solanagram_db"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -67,7 +67,7 @@ services:
       - ./database:/app/database:ro
       - backend_logs:/app/logs
       - /var/run/docker.sock:/var/run/docker.sock
-      - /Users/gimmidefranceschi/.solanagram-forwarder-configs:/tmp/solanagram-configs
+      - ${SOLANAGRAM_CONFIGS_PATH:-./configs}:/tmp/solanagram-configs
     depends_on:
       postgres:
         condition: service_healthy
