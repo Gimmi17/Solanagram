@@ -1492,14 +1492,6 @@ def chats_list():
         ℹ️ Gestisci il logging dei messaggi per le tue chat - attiva il logging per salvare tutti i messaggi nel database
     </div>
     
-    <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #ffc107; border-radius: 8px; background: #fff3cd;">
-        <p style="margin: 0;">
-            <strong>💡 Sviluppi futuri:</strong> 
-            <a href="/chats-backup" style="color: #856404; text-decoration: underline;">Accedi alle vecchie funzionalità chat</a> 
-            per copiare ID e gestire inoltri (funzionalità di backup).
-        </p>
-    </div>
-    
     <div class="loading">
         <div class="spinner"></div>
         <p>Caricamento chat...</p>
