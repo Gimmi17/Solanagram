@@ -1585,18 +1585,15 @@ def chats_list():
                 return;
             }}
             
-            // Raggruppa le chat per stato di logging
+            // Raggruppa le chat per stato di logging usando le sessioni attive
             const chatsWithLogging = [];
             const chatsWithoutLogging = [];
             
             filteredChats.forEach(chat => {{
-                const loggingBtn = document.getElementById(`loggingBtn_${{chat.id}}`);
-                // Se il bottone esiste e mostra "Ferma Logging", la chat ha logging attivo
-                if (loggingBtn && loggingBtn.innerHTML.includes('⏹️ Ferma Logging')) {{
+                // Controlla se la chat ha una sessione di logging attiva
+                if (window.activeSessions && window.activeSessions[chat.id]) {{
                     chatsWithLogging.push(chat);
                 }} else {{
-                    // Altrimenti, controlla se abbiamo informazioni sullo stato dal backend
-                    // Per ora mettiamo tutte le altre chat nel gruppo senza logging
                     chatsWithoutLogging.push(chat);
                 }}
             }});
@@ -1801,63 +1798,76 @@ def chats_list():
             const originalText = button.innerHTML;
             
             try {{
-                // Check current logging status
-                const statusResult = await makeRequest(`/api/logging/chat/${{chatId}}/status`, {{
-                    method: 'GET'
-                }});
+                // Check if chat has active session using stored data
+                const hasActiveSession = window.activeSessions && window.activeSessions[chatId];
                 
-                if (statusResult.success) {{
-                    if (statusResult.has_active_session) {{
-                        // Stop logging
-                        if (confirm(`Sei sicuro di voler fermare il logging per "${{chatTitle}}"?`)) {{
-                            button.innerHTML = '⏹️ Fermando...';
-                            button.disabled = true;
+                if (hasActiveSession) {{
+                    // Stop logging
+                    if (confirm(`Sei sicuro di voler fermare il logging per "${{chatTitle}}"?`)) {{
+                        button.innerHTML = '⏹️ Fermando...';
+                        button.disabled = true;
+                        
+                        const sessionId = window.activeSessions[chatId].id;
+                        const stopResult = await makeRequest(`/api/logging/sessions/${{sessionId}}/stop`, {{
+                            method: 'POST'
+                        }});
+                        
+                        if (stopResult.success) {{
+                            button.innerHTML = '📝 Metti sotto log';
+                            button.className = 'btn btn-primary';
+                            delete button.dataset.sessionId;
                             
-                            const stopResult = await makeRequest(`/api/logging/sessions/${{statusResult.session.id}}/stop`, {{
-                                method: 'POST'
-                            }});
+                            // Remove from active sessions
+                            delete window.activeSessions[chatId];
                             
-                            if (stopResult.success) {{
-                                button.innerHTML = '📝 Metti sotto log';
-                                button.className = 'btn btn-primary';
-                                showMessage('Logging fermato con successo', 'success');
-                                // Rerender per aggiornare il raggruppamento
-                                renderChats();
-                            }} else {{
-                                button.innerHTML = originalText;
-                                showMessage(stopResult.error || 'Errore nel fermare il logging', 'error');
-                            }}
-                        }}
-                    }} else {{
-                        // Start logging
-                        if (confirm(`Sei sicuro di voler iniziare il logging per "${{chatTitle}}"?`)) {{
-                            button.innerHTML = '🔄 Avviando...';
-                            button.disabled = true;
+                            showMessage('Logging fermato con successo', 'success');
                             
-                            const startResult = await makeRequest('/api/logging/sessions', {{
-                                method: 'POST',
-                                body: JSON.stringify({{
-                                    chat_id: chatId,
-                                    chat_title: chatTitle,
-                                    chat_username: chatUsername,
-                                    chat_type: chatType
-                                }})
-                            }});
-                            
-                            if (startResult.success) {{
-                                button.innerHTML = '⏹️ Ferma Logging';
-                                button.className = 'btn btn-danger';
-                                showMessage('Logging avviato con successo', 'success');
-                                // Rerender per aggiornare il raggruppamento
-                                renderChats();
-                            }} else {{
-                                button.innerHTML = originalText;
-                                showMessage(startResult.error || 'Errore nell\'avviare il logging', 'error');
-                            }}
+                            // Rerender per aggiornare il raggruppamento
+                            renderChats();
+                        }} else {{
+                            button.innerHTML = originalText;
+                            showMessage(stopResult.error || 'Errore nel fermare il logging', 'error');
                         }}
                     }}
                 }} else {{
-                    showMessage(statusResult.error || 'Errore nel controllare lo stato del logging', 'error');
+                    // Start logging
+                    if (confirm(`Sei sicuro di voler iniziare il logging per "${{chatTitle}}"?`)) {{
+                        button.innerHTML = '🔄 Avviando...';
+                        button.disabled = true;
+                        
+                        const startResult = await makeRequest('/api/logging/sessions', {{
+                            method: 'POST',
+                            body: JSON.stringify({{
+                                chat_id: chatId,
+                                chat_title: chatTitle,
+                                chat_username: chatUsername,
+                                chat_type: chatType
+                            }})
+                        }});
+                        
+                        if (startResult.success) {{
+                            button.innerHTML = '⏹️ Ferma Logging';
+                            button.className = 'btn btn-danger';
+                            button.dataset.sessionId = startResult.session_id;
+                            
+                            // Add to active sessions
+                            if (!window.activeSessions) window.activeSessions = {{}};
+                            window.activeSessions[chatId] = {{
+                                id: startResult.session_id,
+                                chat_id: chatId,
+                                chat_title: chatTitle,
+                                is_active: true
+                            }};
+                            
+                            showMessage('Logging avviato con successo', 'success');
+                            
+                            // Rerender per aggiornare il raggruppamento
+                            renderChats();
+                        }} else {{
+                            button.innerHTML = originalText;
+                            showMessage(startResult.error || 'Errore nell\'avviare il logging', 'error');
+                        }}
+                    }}
                 }}
             }} catch (error) {{
                 button.innerHTML = originalText;
@@ -1870,23 +1880,38 @@ def chats_list():
         
         // Update button states on page load
         async function updateLoggingButtonStates() {{
-            for (const chat of allChats) {{
-                try {{
-                    const statusResult = await makeRequest(`/api/logging/chat/${{chat.id}}/status`, {{
-                        method: 'GET'
-                    }});
-                    
-                    if (statusResult.success && statusResult.has_active_session) {{
-                        const button = document.getElementById(`loggingBtn_${{chat.id}}`);
-                        if (button) {{
-                            button.innerHTML = '⏹️ Ferma Logging';
-                            button.className = 'btn btn-danger';
+            // Get all logging sessions for the user
+            let activeSessions = {{}};
+            try {{
+                const sessionsResult = await makeRequest('/api/logging/sessions', {{
+                    method: 'GET'
+                }});
+                
+                if (sessionsResult.success && sessionsResult.sessions) {{
+                    sessionsResult.sessions.forEach(session => {{
+                        if (session.is_active) {{
+                            activeSessions[session.chat_id] = session;
                         }}
-                    }}
-                }} catch (error) {{
-                    // Ignore errors for button state updates
+                    }});
+                }}
+            }} catch (error) {{
+                console.error('Error loading logging sessions:', error);
+            }}
+            
+            // Update button states based on active sessions
+            for (const chat of allChats) {{
+                const button = document.getElementById(`loggingBtn_${{chat.id}}`);
+                if (button && activeSessions[chat.id]) {{
+                    button.innerHTML = '⏹️ Ferma Logging';
+                    button.className = 'btn btn-danger';
+                    
+                    // Store session info for easy access
+                    button.dataset.sessionId = activeSessions[chat.id].id;
                 }}
             }}
+            
+            // Store active sessions globally for use in grouping
+            window.activeSessions = activeSessions;
             
             // Rerender chats to apply grouping after button states are updated
             renderChats();
@@ -1894,18 +1919,17 @@ def chats_list():
         
         async function viewLogs(chatId) {{
             try {{
-                const statusResult = await makeRequest(`/api/logging/chat/${{chatId}}/status`, {{
-                    method: 'GET'
-                }});
+                // Check if chat has active session using stored data
+                const activeSession = window.activeSessions && window.activeSessions[chatId];
                 
-                if (statusResult.success && statusResult.session) {{
+                if (activeSession && activeSession.id) {{
                     // Redirect to logs page
-                    window.location.href = `/message-logs/${{statusResult.session.id}}`;
+                    window.location.href = `/message-logs/${{activeSession.id}}`;
                 }} else {{
                     showMessage('Nessuna sessione di logging attiva per questa chat', 'warning');
                 }}
             }} catch (error) {{
-                showMessage('Errore nel controllare lo stato del logging', 'error');
+                showMessage('Errore nel visualizzare i log', 'error');
             }}
         }}
     </script>
@@ -4953,6 +4977,85 @@ def chats_backup():
         menu_styles=Markup(get_menu_styles()),
         menu_scripts=Markup(get_menu_scripts())
     )
+
+# ============================================
+# 📝 LOGGING SYSTEM PROXY ENDPOINTS
+# ============================================
+
+@app.route('/api/logging/sessions', methods=['GET'])
+def proxy_get_logging_sessions():
+    """Proxy get logging sessions to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    response = call_backend('/api/logging/sessions', 'GET', None, token)
+    
+    if response:
+        return jsonify(response), 200
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/logging/sessions', methods=['POST'])
+def proxy_create_logging_session():
+    """Proxy create logging session to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    data = request.get_json()
+    response = call_backend('/api/logging/sessions', 'POST', data, token)
+    
+    if response:
+        return jsonify(response), 200 if response.get('success') else 400
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/logging/sessions/<int:session_id>/stop', methods=['POST'])
+def proxy_stop_logging_session(session_id):
+    """Proxy stop logging session to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    response = call_backend(f'/api/logging/sessions/{session_id}/stop', 'POST', None, token)
+    
+    if response:
+        return jsonify(response), 200 if response.get('success') else 400
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/logging/sessions/<int:session_id>', methods=['DELETE'])
+def proxy_delete_logging_session(session_id):
+    """Proxy delete logging session to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    response = call_backend(f'/api/logging/sessions/{session_id}', 'DELETE', None, token)
+    
+    if response:
+        return jsonify(response), 200 if response.get('success') else 400
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/logging/messages/<int:session_id>', methods=['GET'])
+def proxy_get_logged_messages(session_id):
+    """Proxy get logged messages to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    
+    # Forward query parameters
+    query_params = request.args.to_dict()
+    endpoint = f'/api/logging/messages/{session_id}'
+    if query_params:
+        query_string = '&'.join([f"{k}={v}" for k, v in query_params.items()])
+        endpoint += f'?{query_string}'
+    
+    response = call_backend(endpoint, 'GET', None, token)
+    
+    if response:
+        return jsonify(response), 200
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/logging/chat/<chat_id>/status', methods=['GET'])
+def proxy_get_chat_logging_status(chat_id):
+    """Proxy get chat logging status to backend"""
+    token = request.headers.get('Authorization', '').replace('Bearer ', '')
+    response = call_backend(f'/api/logging/chat/{chat_id}/status', 'GET', None, token)
+    
+    if response:
+        return jsonify(response), 200
+    else:
+        return jsonify({"success": False, "error": "Backend call failed"}), 500
 
 if __name__ == '__main__':
     logger.info("🌐 Starting Telegram Chat Manager Frontend")
