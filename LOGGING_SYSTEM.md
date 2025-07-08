@@ -8,6 +8,7 @@ Il sistema di logging sostituisce il precedente sistema di inoltri con una funzi
 
 ### ✅ Caratteristiche Implementate
 
+- **Sostituzione del menu "Le mie Chat"** con **"Logging Messaggi"**
 - **Sostituzione del bottone "Vedi inoltri"** con **"Metti sotto log"**
 - **Container Docker dedicati** per ogni sessione di logging
 - **Salvataggio completo** di tutti i messaggi nel database
@@ -16,6 +17,7 @@ Il sistema di logging sostituisce il precedente sistema di inoltri con una funzi
 - **Un solo log attivo** per chat (gruppi, persone, bot)
 - **Interfaccia web** per gestire le sessioni di logging
 - **Visualizzazione dei log** con paginazione
+- **Pagina di backup** per le vecchie funzionalità chat
 
 ### 🔧 Componenti del Sistema
 
@@ -151,6 +153,12 @@ CREATE TABLE logging_sessions (
 1. Nella pagina chat, clicca **"⏹️ Ferma Logging"**
 2. Conferma l'operazione
 
+### 4. Accesso alle Vecchie Funzionalità
+
+1. Nella pagina principale "Logging Messaggi", clicca il link **"Accedi alle vecchie funzionalità chat"**
+2. Oppure vai direttamente a `/chats-backup`
+3. Questa pagina contiene le vecchie funzionalità per copiare ID e gestire inoltri
+
 ## 🔍 Monitoraggio
 
 ### Container Status
@@ -267,6 +275,20 @@ ORDER BY ls.messages_logged DESC;
 ```
 
 ## 🔄 Migrazione da Sistema Precedente
+
+### Menu e Navigazione
+
+- **Menu principale**: "Le mie Chat" → **"Logging Messaggi"**
+- **Icona menu**: Cambiata da chat bubble a documento con righe
+- **Funzionalità**: Focus sul logging invece che sulla visualizzazione chat
+
+### Pagina di Backup
+
+- **URL**: `/chats-backup` (accessibile dalla pagina principale)
+- **Funzionalità**: Mantiene tutte le vecchie funzionalità per sviluppi futuri
+- **Scopo**: Permette di copiare ID chat e gestire inoltri se necessario
+
+### Dati e Sistema
 
 Il nuovo sistema è completamente indipendente dal sistema di inoltri precedente. Non è necessaria alcuna migrazione dei dati esistenti.
 

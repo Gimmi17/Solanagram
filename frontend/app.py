@@ -1486,10 +1486,18 @@ def chats_list():
     content = f"""
     {menu_html}
     
-    <h2>💬 Le mie Chat Telegram</h2>
+    <h2>📝 Logging Messaggi Telegram</h2>
     
     <div class="status info">
-        ℹ️ Tutte le tue chat con ID e dettagli - clicca sui bottoni per copiare
+        ℹ️ Gestisci il logging dei messaggi per le tue chat - attiva il logging per salvare tutti i messaggi nel database
+    </div>
+    
+    <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #ffc107; border-radius: 8px; background: #fff3cd;">
+        <p style="margin: 0;">
+            <strong>💡 Sviluppi futuri:</strong> 
+            <a href="/chats-backup" style="color: #856404; text-decoration: underline;">Accedi alle vecchie funzionalità chat</a> 
+            per copiare ID e gestire inoltri (funzionalità di backup).
+        </p>
     </div>
     
     <div class="loading">
@@ -4596,6 +4604,233 @@ def proxy_delete_crypto_rule(rule_id):
         return jsonify(response), 200
     else:
         return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/chats-backup')
+@require_auth
+def chats_backup():
+    """Pagina backup vecchie funzionalità chat (protetta)"""
+    
+    # Use unified menu
+    menu_html = get_unified_menu('chats')
+    
+    content = f"""
+    {menu_html}
+    
+    <h2>💬 Le mie Chat Telegram (Backup)</h2>
+    
+    <div class="status warning">
+        ⚠️ Questa è la versione di backup delle vecchie funzionalità chat. 
+        Per il logging dei messaggi, usa la pagina principale "Logging Messaggi".
+    </div>
+    
+    <div class="status info">
+        ℹ️ Tutte le tue chat con ID e dettagli - clicca sui bottoni per copiare
+    </div>
+    
+    <div class="loading">
+        <div class="spinner"></div>
+        <p>Caricamento chat...</p>
+    </div>
+    
+    <div id="chatsContainer" style="display: none;">
+        <div style="margin-bottom: 30px; padding: 20px; border: 1px solid #dee2e6; border-radius: 8px; background: #f8f9fa;">
+            <h3>🔍 Filtra chat</h3>
+            <div class="form-group">
+                <input type="text" id="searchFilter" placeholder="Cerca per nome, ID o username..." 
+                       style="width: 100%; padding: 10px; border: 1px solid #ced4da; border-radius: 4px;">
+                <small>Ricerca in tempo reale - prova "ROS" per trovare "Rossetto"</small>
+            </div>
+        </div>
+        
+        <div id="chatsList"></div>
+    </div>
+    
+    <div id="errorContainer" style="display: none;">
+        <div class="status error">
+            <h3>❌ Errore</h3>
+            <p id="errorMessage"></p>
+        </div>
+    </div>
+    
+    <script>
+        let allChats = [];
+        let filteredChats = [];
+        
+        // Carica le chat all'avvio
+        document.addEventListener('DOMContentLoaded', loadChats);
+        
+        async function loadChats() {{
+            showLoading();
+            
+            try {{
+                const result = await makeRequest('/api/telegram/get-chats', {{
+                    method: 'GET'
+                }});
+                
+                hideLoading();
+                
+                if (result.success) {{
+                    allChats = result.chats;
+                    filteredChats = [...allChats];
+                    
+                    // Salva le chat in sessionStorage per la navigazione
+                    sessionStorage.setItem('userChats', JSON.stringify(allChats));
+                    
+                    renderChats();
+                    
+                    document.getElementById('chatsContainer').style.display = 'block';
+                    
+                    // Setup filtro di ricerca
+                    document.getElementById('searchFilter').addEventListener('input', filterChats);
+                    
+                }} else {{
+                    // Controlla se è un errore di autorizzazione persa
+                    if (result.error && result.error.includes('Authorization lost')) {{
+                        showReactivationPrompt();
+                    }} else {{
+                        showError(result.error || 'Errore durante il caricamento chat');
+                    }}
+                }}
+            }} catch (error) {{
+                hideLoading();
+                showError('Errore di connessione');
+            }}
+        }}
+        
+        function renderChats() {{
+            const container = document.getElementById('chatsList');
+            
+            if (filteredChats.length === 0) {{
+                container.innerHTML = `
+                    <div class="status warning">
+                        <p>🔍 Nessuna chat trovata con i criteri di ricerca</p>
+                    </div>
+                `;
+                return;
+            }}
+            
+            container.innerHTML = `
+                <div style="margin-bottom: 20px;">
+                    <strong>📊 ${{filteredChats.length}} chat trovate (su ${{allChats.length}} totali)</strong>
+                </div>
+                
+                ${{filteredChats.map(chat => `
+                    <div class="card" style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: between; align-items: start;">
+                            <div style="flex: 1;">
+                                <h3>${{escapeHtml(chat.title)}} ${{getChatIcon(chat.type)}}</h3>
+                                <p><strong>ID:</strong> 
+                                    <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${{chat.id}}</code>
+                                    <button onclick="copyToClipboard('${{chat.id}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
+                                </p>
+                                <p><strong>Tipo:</strong> ${{getChatTypeLabel(chat.type)}}</p>
+                                ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}} 
+                                    <button onclick="copyToClipboard('@${{chat.username}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
+                                </p>` : ''}}
+                                ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
+                                ${{chat.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(chat.description.substring(0, 100))}}${{chat.description.length > 100 ? '...' : ''}}</p>` : ''}}
+                                ${{chat.unread_count ? `<p><strong>Non letti:</strong> ${{chat.unread_count}} messaggi</p>` : ''}}
+                                ${{chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(chat.last_message_date).toLocaleDateString('it-IT')}}</p>` : ''}}
+                                
+                                <div style="margin-top: 15px;">
+                                    <a href="/forwarders/${{chat.id}}" class="btn btn-primary">
+                                        🔄 Vedi inoltri
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `).join('')}}
+            `;
+        }}
+        
+        function filterChats() {{
+            const query = document.getElementById('searchFilter').value.toLowerCase().trim();
+            
+            if (!query) {{
+                filteredChats = [...allChats];
+            }} else {{
+                filteredChats = allChats.filter(chat => 
+                    chat.title.toLowerCase().includes(query) ||
+                    chat.id.toString().includes(query) ||
+                    (chat.username && chat.username.toLowerCase().includes(query)) ||
+                    (chat.description && chat.description.toLowerCase().includes(query))
+                );
+            }}
+            
+            renderChats();
+        }}
+        
+        function copyToClipboard(text) {{
+            navigator.clipboard.writeText(text).then(() => {{
+                showMessage(`Copiato: ${{text}}`, 'success');
+            }}).catch(() => {{
+                // Fallback per browser più vecchi
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                showMessage(`Copiato: ${{text}}`, 'success');
+            }});
+        }}
+        
+        function getChatIcon(type) {{
+            switch(type) {{
+                case 'private': return '👤';
+                case 'group': return '👥';
+                case 'supergroup': return '👥';
+                case 'channel': return '📢';
+                default: return '💬';
+            }}
+        }}
+        
+        function getChatTypeLabel(type) {{
+            switch(type) {{
+                case 'private': return 'Chat privata';
+                case 'group': return 'Gruppo';
+                case 'supergroup': return 'Supergruppo';
+                case 'channel': return 'Canale';
+                default: return type;
+            }}
+        }}
+        
+        function escapeHtml(text) {{
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }}
+        
+        function showError(message) {{
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('errorContainer').style.display = 'block';
+            document.getElementById('chatsContainer').style.display = 'none';
+        }}
+        
+        function showReactivationPrompt() {{
+            document.getElementById('errorContainer').style.display = 'block';
+            document.getElementById('errorMessage').innerHTML = `
+                <div style="text-align: center; padding: 20px;">
+                    <h3>🔐 Sessione Telegram scaduta</h3>
+                    <p>La tua sessione Telegram è scaduta. Devi riattivarla per continuare.</p>
+                    <br>
+                    <a href="/dashboard" class="btn btn-primary">🔄 Riattiva Sessione</a>
+                </div>
+            `;
+        }}
+    </script>
+    """
+    
+    return render_template_string(
+        BASE_TEMPLATE,
+        title="Le mie Chat (Backup)",
+        subtitle="Vecchie funzionalità chat - Backup",
+        content=Markup(content),
+        menu_html=Markup(menu_html),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
+    )
 
 if __name__ == '__main__':
     logger.info("🌐 Starting Telegram Chat Manager Frontend")
