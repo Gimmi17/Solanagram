@@ -1149,7 +1149,7 @@ def dashboard():
             <h3>🔐 Sicurezza</h3>
             <p>Gestisci le impostazioni di sicurezza e monitora l'attività del tuo account</p>
             <br>
-            <a href="/security" class="btn btn-primary">Impostazioni Sicurezza</a>
+            <a href="/profile" class="btn btn-primary">Gestisci Profilo</a>
         </div>
         
         <div class="card">
@@ -3060,7 +3060,7 @@ def crypto_dashboard():
         <div class="card">
             <h3>📊 Storico Messaggi</h3>
             <p>Visualizza tutti i messaggi crypto processati e i dati estratti.</p>
-            <a href="/crypto-history" class="btn btn-info">
+            <a href="/crypto-signals" class="btn btn-info">
                 📈 Visualizza Storico
             </a>
         </div>
