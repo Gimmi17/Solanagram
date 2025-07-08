@@ -2679,6 +2679,15 @@ def api_check_future_tokens():
     """Proxy per controllare future auth tokens"""
     return call_backend('/api/auth/check-future-tokens', 'GET')
 
+@app.route('/api/auth/validate-session', methods=['GET'])
+def api_validate_session():
+    """Proxy per validare la sessione corrente"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    result = call_backend('/api/auth/validate-session', 'GET', auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
 @app.route('/api/auth/clear-future-tokens', methods=['POST'])
 def api_clear_future_tokens():
     """Proxy per cancellare future auth tokens"""

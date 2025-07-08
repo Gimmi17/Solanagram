@@ -2606,6 +2606,55 @@ def logout():
         logger.error(f"Error during logout: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
 
+@app.route('/api/auth/validate-session', methods=['GET'])
+@jwt_required()
+def validate_session():
+    """Validate if the current JWT session is still valid"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        # Get user info to verify the user still exists
+        db = get_db_connection()
+        if not db:
+            return jsonify({"success": False, "error": "Database connection failed"}), 500
+        
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT id, phone, created_at, last_login 
+                FROM users WHERE id = %s
+            """, (current_user_id,))
+            user = cursor.fetchone()
+        
+        if not user:
+            return jsonify({
+                "success": False,
+                "session_valid": False,
+                "error": "Utente non trovato"
+            }), 404
+        
+        # Check if user has been deleted or deactivated
+        # For now, we just verify the user exists
+        # In the future, you could add additional checks like:
+        # - Account status (active/inactive)
+        # - Last activity timestamp
+        # - Session expiration based on last_login
+        
+        return jsonify({
+            "success": True,
+            "session_valid": True,
+            "user_id": user['id'],
+            "phone": hash_phone_number(user['phone']),
+            "last_login": user['last_login'].isoformat() if user['last_login'] else None
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error validating session: {e}")
+        return jsonify({
+            "success": False,
+            "session_valid": False,
+            "error": str(e)
+        }), 500
+
 # ============================================
 # Crypto Signal Processing Endpoints
 # ============================================
