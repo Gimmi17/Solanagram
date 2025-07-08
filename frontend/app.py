@@ -1585,41 +1585,134 @@ def chats_list():
                 return;
             }}
             
+            // Raggruppa le chat per stato di logging
+            const chatsWithLogging = [];
+            const chatsWithoutLogging = [];
+            
+            filteredChats.forEach(chat => {{
+                const loggingBtn = document.getElementById(`loggingBtn_${{chat.id}}`);
+                // Se il bottone esiste e mostra "Ferma Logging", la chat ha logging attivo
+                if (loggingBtn && loggingBtn.innerHTML.includes('⏹️ Ferma Logging')) {{
+                    chatsWithLogging.push(chat);
+                }} else {{
+                    // Altrimenti, controlla se abbiamo informazioni sullo stato dal backend
+                    // Per ora mettiamo tutte le altre chat nel gruppo senza logging
+                    chatsWithoutLogging.push(chat);
+                }}
+            }});
+            
             container.innerHTML = `
                 <div style="margin-bottom: 20px;">
                     <strong>📊 ${{filteredChats.length}} chat trovate (su ${{allChats.length}} totali)</strong>
+                    <div style="margin-top: 5px; font-size: 0.9em; color: #666;">
+                        📝 ${{chatsWithLogging.length}} con logging attivo | 💬 ${{chatsWithoutLogging.length}} senza logging
+                    </div>
                 </div>
                 
-                ${{filteredChats.map(chat => `
-                    <div class="card" style="margin-bottom: 15px;">
-                        <div style="display: flex; justify-content: between; align-items: start;">
-                            <div style="flex: 1;">
-                                <h3>${{escapeHtml(chat.title)}} ${{getChatIcon(chat.type)}}</h3>
-                                <p><strong>ID:</strong> 
-                                    <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${{chat.id}}</code>
-                                    <button onclick="copyToClipboard('${{chat.id}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
-                                </p>
-                                <p><strong>Tipo:</strong> ${{getChatTypeLabel(chat.type)}}</p>
-                                ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}} 
-                                    <button onclick="copyToClipboard('@${{chat.username}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
-                                </p>` : ''}}
-                                ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
-                                ${{chat.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(chat.description.substring(0, 100))}}${{chat.description.length > 100 ? '...' : ''}}</p>` : ''}}
-                                ${{chat.unread_count ? `<p><strong>Non letti:</strong> ${{chat.unread_count}} messaggi</p>` : ''}}
-                                ${{chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(chat.last_message_date).toLocaleDateString('it-IT')}}</p>` : ''}}
-                                
-                                <div style="margin-top: 15px;">
-                                    <button onclick="toggleLogging(${{chat.id}}, '${{escapeHtml(chat.title)}}', '${{chat.username || ''}}', '${{chat.type}}')" class="btn btn-primary" id="loggingBtn_${{chat.id}}">
-                                        📝 Metti sotto log
-                                    </button>
-                                    <button onclick="viewLogs(${{chat.id}})" class="btn btn-info" style="margin-left: 10px;" id="viewLogsBtn_${{chat.id}}">
-                                        📋 Vedi Log
-                                    </button>
+                ${{chatsWithLogging.length > 0 ? `
+                    <div style="margin-bottom: 25px;">
+                        <h3 style="color: #28a745; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 2px solid #28a745;">
+                            📝 Chat con Logging Attivo (${{chatsWithLogging.length}})
+                        </h3>
+                ` : `
+                    <div style="margin-bottom: 25px; text-align: center; padding: 20px; background: #f8fff9; border: 1px solid #d4edda; border-radius: 8px;">
+                        <h3 style="color: #28a745; margin-bottom: 10px;">📝 Nessuna chat con logging attivo</h3>
+                        <p style="color: #6c757d; margin: 0;">Attiva il logging per una chat per vederla qui</p>
+                    </div>
+                `}}
+                        ${{chatsWithLogging.map(chat => `
+                            <div class="card" style="margin-bottom: 15px; border-left: 4px solid #28a745; background: linear-gradient(135deg, #f8fff9 0%, #ffffff 100%);">
+                                <div style="display: flex; justify-content: between; align-items: start;">
+                                    <div style="flex: 1;">
+                                        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                                            <h3 style="margin: 0; margin-right: 10px;">${{escapeHtml(chat.title)}} ${{getChatIcon(chat.type)}}</h3>
+                                            <span class="badge badge-success" style="background: #28a745; color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.8em;">
+                                                📝 Logging Attivo
+                                            </span>
+                                        </div>
+                                        <p><strong>ID:</strong> 
+                                            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${{chat.id}}</code>
+                                            <button onclick="copyToClipboard('${{chat.id}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
+                                        </p>
+                                        <p><strong>Tipo:</strong> ${{getChatTypeLabel(chat.type)}}</p>
+                                        ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}} 
+                                            <button onclick="copyToClipboard('@${{chat.username}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
+                                        </p>` : ''}}
+                                        ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
+                                        ${{chat.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(chat.description.substring(0, 100))}}${{chat.description.length > 100 ? '...' : ''}}</p>` : ''}}
+                                        ${{chat.unread_count ? `<p><strong>Non letti:</strong> ${{chat.unread_count}} messaggi</p>` : ''}}
+                                        ${{chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(chat.last_message_date).toLocaleDateString('it-IT')}}</p>` : ''}}
+                                        
+                                        <div style="margin-top: 15px;">
+                                            <button onclick="toggleLogging(${{chat.id}}, '${{escapeHtml(chat.title)}}', '${{chat.username || ''}}', '${{chat.type}}')" class="btn btn-danger" id="loggingBtn_${{chat.id}}">
+                                                ⏹️ Ferma Logging
+                                            </button>
+                                            <button onclick="viewLogs(${{chat.id}})" class="btn btn-info" style="margin-left: 10px;" id="viewLogsBtn_${{chat.id}}">
+                                                📋 Vedi Log
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
+                        `).join('')}}
                     </div>
-                `).join('')}}
+                ` : ''}}
+                
+                ${{chatsWithoutLogging.length > 0 ? `
+                    <div>
+                        <h3 style="color: #6c757d; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 2px solid #6c757d;">
+                            💬 Chat senza Logging (${{chatsWithoutLogging.length}})
+                        </h3>
+                ` : `
+                    <div style="text-align: center; padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px;">
+                        <h3 style="color: #6c757d; margin-bottom: 10px;">💬 Tutte le chat hanno logging attivo</h3>
+                        <p style="color: #6c757d; margin: 0;">Ottimo lavoro! Tutte le chat sono sotto logging</p>
+                    </div>
+                `}}
+                
+                ${{chatsWithLogging.length === 0 && chatsWithoutLogging.length === 0 ? `
+                    <div style="text-align: center; padding: 40px; color: #6c757d;">
+                        <h3>📝 Nessuna chat trovata</h3>
+                        <p>Prova a modificare i criteri di ricerca</p>
+                    </div>
+                ` : ''}}
+                        ${{chatsWithoutLogging.map(chat => `
+                            <div class="card" style="margin-bottom: 15px; border-left: 4px solid #6c757d; background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);">
+                                <div style="display: flex; justify-content: between; align-items: start;">
+                                    <div style="flex: 1;">
+                                        <div style="display: flex; align-items: center; margin-bottom: 10px;">
+                                            <h3 style="margin: 0; margin-right: 10px;">${{escapeHtml(chat.title)}} ${{getChatIcon(chat.type)}}</h3>
+                                            <span class="badge badge-secondary" style="background: #6c757d; color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.8em;">
+                                                💬 Nessun Logging
+                                            </span>
+                                        </div>
+                                        <p><strong>ID:</strong> 
+                                            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${{chat.id}}</code>
+                                            <button onclick="copyToClipboard('${{chat.id}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
+                                        </p>
+                                        <p><strong>Tipo:</strong> ${{getChatTypeLabel(chat.type)}}</p>
+                                        ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}} 
+                                            <button onclick="copyToClipboard('@${{chat.username}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
+                                        </p>` : ''}}
+                                        ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
+                                        ${{chat.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(chat.description.substring(0, 100))}}${{chat.description.length > 100 ? '...' : ''}}</p>` : ''}}
+                                        ${{chat.unread_count ? `<p><strong>Non letti:</strong> ${{chat.unread_count}} messaggi</p>` : ''}}
+                                        ${{chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(chat.last_message_date).toLocaleDateString('it-IT')}}</p>` : ''}}
+                                        
+                                        <div style="margin-top: 15px;">
+                                            <button onclick="toggleLogging(${{chat.id}}, '${{escapeHtml(chat.title)}}', '${{chat.username || ''}}', '${{chat.type}}')" class="btn btn-primary" id="loggingBtn_${{chat.id}}">
+                                                📝 Metti sotto log
+                                            </button>
+                                            <button onclick="viewLogs(${{chat.id}})" class="btn btn-info" style="margin-left: 10px;" id="viewLogsBtn_${{chat.id}}">
+                                                📋 Vedi Log
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        `).join('')}}
+                    </div>
+                ` : ''}}
             `;
         }}
         
@@ -1724,6 +1817,8 @@ def chats_list():
                                 button.innerHTML = '📝 Metti sotto log';
                                 button.className = 'btn btn-primary';
                                 showMessage('Logging fermato con successo', 'success');
+                                // Rerender per aggiornare il raggruppamento
+                                renderChats();
                             }} else {{
                                 button.innerHTML = originalText;
                                 showMessage(stopResult.error || 'Errore nel fermare il logging', 'error');
@@ -1749,6 +1844,8 @@ def chats_list():
                                 button.innerHTML = '⏹️ Ferma Logging';
                                 button.className = 'btn btn-danger';
                                 showMessage('Logging avviato con successo', 'success');
+                                // Rerender per aggiornare il raggruppamento
+                                renderChats();
                             }} else {{
                                 button.innerHTML = originalText;
                                 showMessage(startResult.error || 'Errore nell\'avviare il logging', 'error');
@@ -1786,6 +1883,9 @@ def chats_list():
                     // Ignore errors for button state updates
                 }}
             }}
+            
+            // Rerender chats to apply grouping after button states are updated
+            renderChats();
         }}
         
         async function viewLogs(chatId) {{
