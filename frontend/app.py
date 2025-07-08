@@ -1092,7 +1092,7 @@ def dashboard():
     
     <div class="grid">
         <div class="card">
-            <h3>Account Information</h3>
+            <h3>👤 Account Information</h3>
             <p><strong>Telefono:</strong> {user_data.get('phone_number', 'N/A')}</p>
             <p><strong>API ID:</strong> {user_data.get('api_id', 'N/A')}</p>
             <p><strong>Registrato:</strong> {user_data.get('created_at', 'N/A')[:10] if user_data.get('created_at') else 'N/A'}</p>
@@ -1102,21 +1102,49 @@ def dashboard():
         </div>
         
         <div class="card">
-            <h3>Chat Management</h3>
+            <h3>💬 Chat Management</h3>
             <p>Visualizza tutte le tue chat Telegram con ID e dettagli per la gestione dei reindirizzamenti</p>
             <br>
             <a href="/chats" class="btn btn-primary">Visualizza Chat</a>
         </div>
         
         <div class="card">
-            <h3>Chat Search</h3>
+            <h3>🔍 Trova Chat</h3>
             <p>Cerca l'ID di una chat Telegram inserendo username o nome del gruppo</p>
             <br>
             <a href="/find" class="btn btn-primary">Cerca Chat</a>
         </div>
         
         <div class="card">
-            <h3>System Status</h3>
+            <h3>🔄 Reindirizzamenti</h3>
+            <p>Gestisci tutti i reindirizzamenti configurati tra le tue chat Telegram</p>
+            <br>
+            <a href="/configured-channels" class="btn btn-primary">Gestisci Reindirizzamenti</a>
+        </div>
+        
+        <div class="card">
+            <h3>🚀 Crypto Signals</h3>
+            <p>Monitora e analizza i segnali crypto dalle tue chat configurate</p>
+            <br>
+            <a href="/crypto-signals" class="btn btn-primary">Visualizza Signals</a>
+        </div>
+        
+        <div class="card">
+            <h3>📧 Gestione Messaggi</h3>
+            <p>Configura e gestisci i listener per l'elaborazione automatica dei messaggi</p>
+            <br>
+            <a href="/message-manager" class="btn btn-primary">Gestisci Messaggi</a>
+        </div>
+        
+        <div class="card">
+            <h3>🔐 Sicurezza</h3>
+            <p>Gestisci le impostazioni di sicurezza e monitora l'attività del tuo account</p>
+            <br>
+            <a href="/security" class="btn btn-primary">Impostazioni Sicurezza</a>
+        </div>
+        
+        <div class="card">
+            <h3>📊 System Status</h3>
             <p><strong>Backend:</strong> <span class="badge badge-{'success' if backend_info and backend_info.get('status') == 'healthy' else 'danger'}">{'Online' if backend_info and backend_info.get('status') == 'healthy' else 'Offline'}</span></p>
             <p><strong>Ambiente:</strong> <code>{ENVIRONMENT}</code></p>
             <p><strong>Sessione:</strong> <span class="badge badge-success">Attiva</span></p>

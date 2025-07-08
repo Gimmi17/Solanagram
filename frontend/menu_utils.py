@@ -20,7 +20,7 @@ def get_unified_menu(current_page: Optional[str] = None) -> str:
         HTML string for the unified corporate menu
     """
     
-    # Menu items configuration with SVG icons
+    # Menu items configuration with SVG icons - Simplified menu
     menu_items = [
         {
             "url": "/dashboard", 
@@ -43,57 +43,12 @@ def get_unified_menu(current_page: Optional[str] = None) -> str:
             "id": "profile"
         },
         {
-            "url": "/change-password", 
-            "icon": '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M15 7a2 2 0 0 1 2 2m4 0a6 6 0 0 1-7.743 5.743L11 17H9v2H7v2H4a1 1 0 0 1-1-1v-2.586a1 1 0 0 1 .293-.707l5.964-5.964A6 6 0 1 1 21 9z"></path>
-            </svg>''', 
-            "text": "Cambia Password", 
-            "id": "change-password"
-        },
-        {
             "url": "/chats", 
             "icon": '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
             </svg>''', 
             "text": "Le mie Chat", 
             "id": "chats"
-        },
-        {
-            "url": "/message-manager", 
-            "icon": '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-                <polyline points="22,6 12,13 2,6"></polyline>
-            </svg>''', 
-            "text": "Gestione Messaggi", 
-            "id": "message-manager"
-        },
-        {
-            "url": "/configured-channels", 
-            "icon": '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="17,1 21,5 17,9"></polyline>
-                <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
-                <polyline points="7,23 3,19 7,15"></polyline>
-                <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
-            </svg>''', 
-            "text": "Reindirizzamenti", 
-            "id": "configured-channels"
-        },
-        {
-            "url": "/crypto-dashboard", 
-            "icon": '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path>
-            </svg>''', 
-            "text": "Crypto", 
-            "id": "crypto-dashboard"
-        },
-        {
-            "url": "/find", 
-            "icon": '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"></circle>
-                <path d="M21 21l-4.35-4.35"></path>
-            </svg>''', 
-            "text": "Trova Chat", 
-            "id": "find"
         }
     ]
     
@@ -187,15 +142,14 @@ def get_menu_styles() -> str:
         }
         
         .brand-icon {
-            width: 40px;
-            height: 40px;
+            width: 32px;
+            height: 32px;
             color: rgba(255, 255, 255, 0.9);
         }
         
         .brand-text {
             font-family: 'Segoe UI', system-ui, sans-serif;
             letter-spacing: -0.5px;
-            font-size: 2rem;
         }
         
         .nav-menu {
@@ -332,12 +286,8 @@ def get_menu_styles() -> str:
             }
             
             .brand-icon {
-                width: 32px;
-                height: 32px;
-            }
-            
-            .brand-text {
-                font-size: 1.5rem;
+                width: 28px;
+                height: 28px;
             }
             
             .nav-menu {
@@ -394,12 +344,8 @@ def get_menu_styles() -> str:
             }
             
             .brand-icon {
-                width: 28px;
-                height: 28px;
-            }
-            
-            .brand-text {
-                font-size: 1.1rem;
+                width: 24px;
+                height: 24px;
             }
             
             .nav-menu {
@@ -445,33 +391,27 @@ def get_menu_scripts() -> str:
         // Enhanced logout function with confirmation
         async function logout() {
             if (confirm('Sei sicuro di voler uscire?')) {
-                // Use the global performLogout function if available
-                if (typeof performLogout === 'function') {
-                    await performLogout();
-                } else {
-                    // Fallback to manual logout
-                    try {
-                        const result = await makeRequest('/api/auth/logout', {
-                            method: 'POST'
-                        });
-                        
-                        // Clear local storage
-                        localStorage.removeItem('access_token');
-                        localStorage.removeItem('session_token');
-                        
-                        // Redirect
-                        if (result && result.redirect) {
-                            window.location.href = result.redirect;
-                        } else {
-                            window.location.href = '/login';
-                        }
-                    } catch (error) {
-                        console.error('Logout error:', error);
-                        // Force redirect even on error
-                        localStorage.removeItem('access_token');
-                        localStorage.removeItem('session_token');
+                try {
+                    const result = await makeRequest('/api/auth/logout', {
+                        method: 'POST'
+                    });
+                    
+                    // Clear local storage
+                    localStorage.removeItem('access_token');
+                    localStorage.removeItem('session_token');
+                    
+                    // Redirect
+                    if (result && result.redirect) {
+                        window.location.href = result.redirect;
+                    } else {
                         window.location.href = '/login';
                     }
+                } catch (error) {
+                    console.error('Logout error:', error);
+                    // Force redirect even on error
+                    localStorage.removeItem('access_token');
+                    localStorage.removeItem('session_token');
+                    window.location.href = '/login';
                 }
             }
         }
