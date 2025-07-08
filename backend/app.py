@@ -1364,6 +1364,69 @@ def user_profile():
             logger.error(f"Error updating user profile for ID {current_user_id}: {e}")
             return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
 
+@app.route('/api/user/change-password', methods=['POST'])
+@jwt_required()
+def change_password():
+    """Change user password"""
+    current_user_id = get_jwt_identity()
+    db = get_db_connection()
+    
+    if not db:
+        return jsonify({"success": False, "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+    
+    data = request.get_json()
+    current_password = data.get('current_password')
+    new_password = data.get('new_password')
+    confirm_password = data.get('confirm_password')
+    
+    # Validation
+    if not current_password or not new_password or not confirm_password:
+        return jsonify({"success": False, "error": "Tutti i campi sono obbligatori"}), 400
+    
+    if new_password != confirm_password:
+        return jsonify({"success": False, "error": "Le nuove password non coincidono"}), 400
+    
+    if len(new_password) < 6:
+        return jsonify({"success": False, "error": "La nuova password deve essere di almeno 6 caratteri"}), 400
+    
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get current user password hash
+            cursor.execute("""
+                SELECT password_hash FROM users WHERE id = %s
+            """, (current_user_id,))
+            user = cursor.fetchone()
+            
+            if not user:
+                return jsonify({"success": False, "error": "Utente non trovato"}), 404
+            
+            # Verify current password
+            if not check_password_hash(user['password_hash'], current_password):
+                return jsonify({"success": False, "error": "Password attuale non corretta"}), 400
+            
+            # Hash new password
+            new_password_hash = generate_password_hash(new_password)
+            
+            # Update password
+            cursor.execute("""
+                UPDATE users 
+                SET password_hash = %s 
+                WHERE id = %s
+            """, (new_password_hash, current_user_id))
+            
+            db.commit()
+            
+            logger.info(f"Password changed successfully for user ID {current_user_id}")
+            return jsonify({
+                "success": True,
+                "message": "Password aggiornata con successo"
+            }), 200
+            
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error changing password for user ID {current_user_id}: {e}")
+        return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
 @app.route('/api/user/chats', methods=['GET'])
 @jwt_required()
 def get_user_chats():

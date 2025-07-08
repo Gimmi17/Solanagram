@@ -1115,7 +1115,7 @@ def profile():
     <h2>👤 Gestione Profilo</h2>
     
     <div class="status info">
-        ℹ️ Qui puoi visualizzare e modificare le tue informazioni e credenziali API
+        ℹ️ Qui puoi visualizzare e modificare le tue informazioni, credenziali API e password
     </div>
     
     <div class="grid">
@@ -1138,9 +1138,17 @@ def profile():
             <button onclick="showEditForm()" class="btn">✏️ Modifica Credenziali</button>
             <a href="https://my.telegram.org/apps" target="_blank" class="btn" style="margin-left: 10px; background: #27ae60;">🔗 Ottieni nuove API</a>
         </div>
+        
+        <!-- Cambio Password -->
+        <div class="card">
+            <h3>🔐 Cambio Password</h3>
+            <p>Modifica la password del tuo account per mantenere la sicurezza.</p>
+            <br>
+            <button onclick="showPasswordForm()" class="btn">🔒 Cambia Password</button>
+        </div>
     </div>
     
-    <!-- Form di modifica (nascosto di default) -->
+    <!-- Form di modifica credenziali API (nascosto di default) -->
     <div id="editForm" style="display: none; margin-top: 30px;">
         <div class="card">
             <h3>✏️ Aggiorna Credenziali API</h3>
@@ -1177,6 +1185,50 @@ def profile():
         </div>
     </div>
     
+    <!-- Form di cambio password (nascosto di default) -->
+    <div id="passwordForm" style="display: none; margin-top: 30px;">
+        <div class="card">
+            <h3>🔐 Cambio Password</h3>
+            
+            <div class="status info">
+                ℹ️ <strong>Informazioni:</strong> Inserisci la password attuale e la nuova password desiderata.
+            </div>
+            
+            <form id="changePasswordForm">
+                <div class="form-group">
+                    <label for="currentPassword">Password Attuale</label>
+                    <input type="password" id="currentPassword" name="current_password" required 
+                           placeholder="Inserisci la password attuale">
+                    <small>Password attualmente in uso per il tuo account</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="newPassword">Nuova Password</label>
+                    <input type="password" id="newPassword" name="new_password" required 
+                           placeholder="Inserisci la nuova password" minlength="6">
+                    <small>La nuova password deve essere di almeno 6 caratteri</small>
+                </div>
+                
+                <div class="form-group">
+                    <label for="confirmPassword">Conferma Nuova Password</label>
+                    <input type="password" id="confirmPassword" name="confirm_password" required 
+                           placeholder="Conferma la nuova password" minlength="6">
+                    <small>Ripeti la nuova password per confermare</small>
+                </div>
+                
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>Aggiornamento password in corso...</p>
+                </div>
+                
+                <div class="form-actions">
+                    <button type="submit" class="btn success">🔒 Cambia Password</button>
+                    <button type="button" onclick="hidePasswordForm()" class="btn" style="margin-left: 10px;">❌ Annulla</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
     <!-- Istruzioni -->
     <div class="card" style="margin-top: 30px;">
         <h3>📖 Come ottenere le credenziali API</h3>
@@ -1203,6 +1255,16 @@ def profile():
         function hideEditForm() {{
             document.getElementById('editForm').style.display = 'none';
             document.getElementById('updateCredentialsForm').reset();
+        }}
+        
+        function showPasswordForm() {{
+            document.getElementById('passwordForm').style.display = 'block';
+            document.getElementById('currentPassword').focus();
+        }}
+        
+        function hidePasswordForm() {{
+            document.getElementById('passwordForm').style.display = 'none';
+            document.getElementById('changePasswordForm').reset();
         }}
         
         document.getElementById('updateCredentialsForm').addEventListener('submit', async (e) => {{
@@ -1259,12 +1321,74 @@ def profile():
                     showMessage(result.error || 'Errore durante l\'aggiornamento', 'error');
                 }}
                 
-            }} catch (error) {{
-                hideLoading();
-                showMessage('Errore di connessione', 'error');
-            }}
-        }});
-    </script>
+                            }} catch (error) {{
+                    hideLoading();
+                    showMessage('Errore di connessione', 'error');
+                }}
+            }});
+            
+            document.getElementById('changePasswordForm').addEventListener('submit', async (e) => {{
+                e.preventDefault();
+                
+                const formData = new FormData(e.target);
+                const currentPassword = formData.get('current_password');
+                const newPassword = formData.get('new_password');
+                const confirmPassword = formData.get('confirm_password');
+                
+                if (!currentPassword || !newPassword || !confirmPassword) {{
+                    showMessage('Compila tutti i campi', 'error');
+                    return;
+                }}
+                
+                if (newPassword.length < 6) {{
+                    showMessage('La nuova password deve essere di almeno 6 caratteri', 'error');
+                    return;
+                }}
+                
+                if (newPassword !== confirmPassword) {{
+                    showMessage('Le nuove password non coincidono', 'error');
+                    return;
+                }}
+                
+                if (!confirm('Sei sicuro di voler cambiare la password?')) {{
+                    return;
+                }}
+                
+                showLoading();
+                
+                try {{
+                    const result = await makeRequest('/api/user/change-password', {{
+                        method: 'POST',
+                        body: JSON.stringify({{
+                            current_password: currentPassword,
+                            new_password: newPassword,
+                            confirm_password: confirmPassword
+                        }})
+                    }});
+                    
+                    hideLoading();
+                    
+                    if (result.success) {{
+                        showMessage(result.message, 'success');
+                        hidePasswordForm();
+                        
+                        // Opzionale: logout automatico dopo cambio password
+                        setTimeout(() => {{
+                            if (confirm('Password aggiornata con successo! Per sicurezza, ti consigliamo di effettuare il logout e rifare il login. Vuoi procedere?')) {{
+                                logout();
+                            }}
+                        }}, 2000);
+                        
+                    }} else {{
+                        showMessage(result.error || 'Errore durante il cambio password', 'error');
+                    }}
+                    
+                }} catch (error) {{
+                    hideLoading();
+                    showMessage('Errore di connessione', 'error');
+                }}
+            }});
+        </script>
     """
     
     return render_template_string(
