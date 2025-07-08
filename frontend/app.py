@@ -602,7 +602,7 @@ def login():
             </div>
             <div class="form-actions" style="margin-top: 10px;">
                 <button type="button" id="useFutureTokens" class="btn success">🔄 Usa token salvati</button>
-                <button type="button" id="requestNewCode" class="btn">📱 Richiedi nuovo codice</button>
+                <button type="button" id="requestNewCode2" class="btn">📱 Richiedi nuovo codice</button>
             </div>
         </div>
         
@@ -723,6 +723,42 @@ def login():
             }
         });
         
+        // Richiedi nuovo codice (secondo bottone)
+        document.getElementById('requestNewCode2').addEventListener('click', async function() {
+            const phone = document.getElementById('phone_number').value.trim();
+            const password = document.getElementById('password').value.trim();
+            
+            if (!phone || !password) {
+                showMessage('Inserisci numero di telefono e password', 'error');
+                return;
+            }
+            
+            showLoading();
+            
+            const result = await makeRequest('/api/auth/login', {
+                method: 'POST',
+                body: JSON.stringify({ 
+                    phone_number: phone,
+                    password: password 
+                })
+            });
+            
+            hideLoading();
+            
+            if (result.success) {
+                // Salva dati per la verifica
+                localStorage.setItem('temp_phone', phone);
+                showMessage(result.message, 'success');
+                
+                // Redirect a pagina verifica codice
+                setTimeout(() => {
+                    window.location.href = '/verify-code';
+                }, 2000);
+            } else {
+                showMessage(result.error || 'Errore nel login', 'error');
+            }
+        });
+        
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
@@ -748,42 +784,43 @@ def login():
                 });
                 
                 hideLoading();
-            
-            if (result.success) {
-                // Salva user_id per la verifica
-                localStorage.setItem('temp_user_id', result.user_id);
-                localStorage.setItem('temp_phone', phone);
                 
-                showMessage(result.message, 'success');
-                
-                // Redirect a pagina verifica codice
-                setTimeout(() => {
-                    window.location.href = '/verify-code';
-                }, 2000);
-            } else {
-                // Gestione speciale per FLOOD_WAIT
-                if (result.error && result.error.includes('FLOOD_WAIT')) {
-                    // Estrai il tempo di attesa dal messaggio
-                    const waitMatch = result.error.match(/Attendi (\d+) secondi/);
-                    if (waitMatch) {
-                        const waitSeconds = parseInt(waitMatch[1]);
-                        const waitHours = Math.floor(waitSeconds / 3600);
-                        const waitMinutes = Math.floor((waitSeconds % 3600) / 60);
-                        
-                        let waitMessage = `🚫 <strong>Limite Telegram raggiunto!</strong><br><br>`;
-                        waitMessage += `Hai fatto troppe richieste di codici SMS in poco tempo.<br>`;
-                        waitMessage += `Telegram richiede di attendere: <strong>${waitHours} ore e ${waitMinutes} minuti</strong><br><br>`;
-                        waitMessage += `💡 <strong>Suggerimenti:</strong><br>`;
-                        waitMessage += `• Usa il sistema di cache per riutilizzare codici esistenti<br>`;
-                        waitMessage += `• Prova con un numero di telefono diverso<br>`;
-                        waitMessage += `• Aspetta che scada il limite temporaneo`;
-                        
-                        showMessage(waitMessage, 'error');
-                    } else {
-                        showMessage(result.error, 'error');
-                    }
+                if (result.success) {
+                    // Salva user_id per la verifica
+                    localStorage.setItem('temp_user_id', result.user_id);
+                    localStorage.setItem('temp_phone', phone);
+                    
+                    showMessage(result.message, 'success');
+                    
+                    // Redirect a pagina verifica codice
+                    setTimeout(() => {
+                        window.location.href = '/verify-code';
+                    }, 2000);
                 } else {
-                    showMessage(result.error || 'Errore durante il login', 'error');
+                    // Gestione speciale per FLOOD_WAIT
+                    if (result.error && result.error.includes('FLOOD_WAIT')) {
+                        // Estrai il tempo di attesa dal messaggio
+                        const waitMatch = result.error.match(/Attendi (\d+) secondi/);
+                        if (waitMatch) {
+                            const waitSeconds = parseInt(waitMatch[1]);
+                            const waitHours = Math.floor(waitSeconds / 3600);
+                            const waitMinutes = Math.floor((waitSeconds % 3600) / 60);
+                            
+                            let waitMessage = `🚫 <strong>Limite Telegram raggiunto!</strong><br><br>`;
+                            waitMessage += `Hai fatto troppe richieste di codici SMS in poco tempo.<br>`;
+                            waitMessage += `Telegram richiede di attendere: <strong>${waitHours} ore e ${waitMinutes} minuti</strong><br><br>`;
+                            waitMessage += `💡 <strong>Suggerimenti:</strong><br>`;
+                            waitMessage += `• Usa il sistema di cache per riutilizzare codici esistenti<br>`;
+                            waitMessage += `• Prova con un numero di telefono diverso<br>`;
+                            waitMessage += `• Aspetta che scada il limite temporaneo`;
+                            
+                            showMessage(waitMessage, 'error');
+                        } else {
+                            showMessage(result.error, 'error');
+                        }
+                    } else {
+                        showMessage(result.error || 'Errore durante il login', 'error');
+                    }
                 }
             } catch (error) {
                 hideLoading();
@@ -1222,7 +1259,7 @@ def profile():
                 return;
             }}
             
-            if (!confirm('Sei sicuro di voler aggiornare le credenziali API? Dovrai rifare il login.')) {{
+            if (!confirm('Sei sicuro di voler aggiornare le credenziali API? Dovrai rifare il login per usare le nuove API.')) {{
                 return;
             }}
             
@@ -2741,6 +2778,17 @@ def api_check_credentials_status():
     result = call_backend('/api/auth/check-credentials-status', 'GET', auth_token=session['session_token'])
     return jsonify(result or {'error': 'Backend non disponibile'})
 
+@app.route('/api/auth/session-token', methods=['GET'])
+def get_session_token():
+    """Get current session token for frontend JavaScript"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    return jsonify({
+        'success': True,
+        'token': session['session_token']
+    })
+
 # ========================================================================================
 # CRYPTO SIGNAL API PROXIES
 # ========================================================================================
@@ -2864,183 +2912,7 @@ def crypto_dashboard():
         content=Markup(content)
     )
 
-@app.route('/security')
-@require_auth
-def security_page():
-    """Pagina sicurezza e gestione credenziali"""
-    
-    # Use unified menu
-    menu_html = get_unified_menu('security')
-    
-    content = f"""
-    {menu_html}
-    
-    <h2>🔐 Sicurezza Account</h2>
-    
-    <div class="card">
-        <h3>📊 Stato Sicurezza</h3>
-        <div id="securityStatus" class="loading">
-            <div class="spinner"></div>
-            <p>Controllo stato sicurezza...</p>
-        </div>
-    </div>
-    
-    <div class="card" style="margin-top: 20px;">
-        <h3>🔄 Rotazione Credenziali</h3>
-        <div class="status warning">
-            <p><strong>⚠️ Attenzione:</strong> La rotazione delle credenziali fermerà tutti i reindirizzamenti attivi.</p>
-            <p>Dovrai ricreare tutti i forwarder dopo aver aggiornato le credenziali.</p>
-        </div>
-        
-        <form id="rotateCredentialsForm" onsubmit="rotateCredentials(event)" style="margin-top: 20px;">
-            <div class="form-group">
-                <label for="newApiId">Nuovo API ID</label>
-                <input type="text" id="newApiId" name="newApiId" required 
-                       placeholder="Es: 12345678" pattern="[0-9]+" 
-                       title="Solo numeri">
-            </div>
-            
-            <div class="form-group">
-                <label for="newApiHash">Nuovo API Hash</label>
-                <input type="text" id="newApiHash" name="newApiHash" required 
-                       placeholder="Es: a1b2c3d4e5f6..." pattern="[a-f0-9]{{32}}"
-                       title="32 caratteri esadecimali">
-            </div>
-            
-            <button type="submit" class="btn btn-danger">
-                🔄 Ruota Credenziali
-            </button>
-        </form>
-    </div>
-    
-    <div class="card" style="margin-top: 20px;">
-        <h3>📚 Best Practices di Sicurezza</h3>
-        <ul>
-            <li>Ruota le credenziali API ogni 3 mesi</li>
-            <li>Non condividere mai le tue credenziali API</li>
-            <li>Usa password complesse per il tuo account</li>
-            <li>Monitora regolarmente i container per attività sospette</li>
-            <li>Rimuovi i forwarder non più utilizzati</li>
-        </ul>
-    </div>
-    
-    <script>
-        document.addEventListener('DOMContentLoaded', checkSecurityStatus);
-        
-        async function checkSecurityStatus() {{
-            try {{
-                const result = await makeRequest('/api/auth/check-credentials-status', {{
-                    method: 'GET'
-                }});
-                
-                if (result.success) {{
-                    renderSecurityStatus(result);
-                }} else {{
-                    showError('Errore nel controllo sicurezza');
-                }}
-            }} catch (error) {{
-                showError('Errore di connessione');
-            }}
-        }}
-        
-        function renderSecurityStatus(data) {{
-            const container = document.getElementById('securityStatus');
-            
-            let statusIcon = '✅';
-            let statusColor = '#28a745';
-            let statusText = 'Sicuro';
-            
-            if (data.status === 'warning') {{
-                statusIcon = '⚠️';
-                statusColor = '#ffc107';
-                statusText = 'Attenzione';
-            }} else if (data.status === 'danger') {{
-                statusIcon = '❌';
-                statusColor = '#dc3545';
-                statusText = 'A rischio';
-            }}
-            
-            container.innerHTML = `
-                <div style="text-align: center; padding: 20px;">
-                    <div style="font-size: 48px;">${{statusIcon}}</div>
-                    <h4 style="color: ${{statusColor}};">${{statusText}}</h4>
-                    <p>Credenziali aggiornate ${{data.days_since_update}} giorni fa</p>
-                </div>
-                
-                ${{data.recommendations.length > 0 ? `
-                    <div style="margin-top: 20px;">
-                        <h5>Raccomandazioni:</h5>
-                        <ul>
-                            ${{data.recommendations.map(rec => `
-                                <li>
-                                    <strong>${{rec.message}}</strong><br>
-                                    <small>${{rec.action}}</small>
-                                </li>
-                            `).join('')}}
-                        </ul>
-                    </div>
-                ` : ''}}
-            `;
-        }}
-        
-        async function rotateCredentials(event) {{
-            event.preventDefault();
-            
-            if (!confirm('Sei sicuro di voler ruotare le credenziali? Tutti i forwarder verranno fermati.')) {{
-                return;
-            }}
-            
-            const newApiId = document.getElementById('newApiId').value;
-            const newApiHash = document.getElementById('newApiHash').value;
-            
-            showMessage('Rotazione credenziali in corso...', 'info');
-            
-            try {{
-                const result = await makeRequest('/api/auth/rotate-credentials', {{
-                    method: 'POST',
-                    body: JSON.stringify({{
-                        new_api_id: newApiId,
-                        new_api_hash: newApiHash
-                    }})
-                }});
-                
-                if (result.success) {{
-                    showMessage(`✅ ${{result.message}}<br>
-                        <strong>Container fermati:</strong> ${{result.stopped_containers}}<br>
-                        <strong>Azione richiesta:</strong> ${{result.action_required}}`, 'success');
-                    
-                    // Refresh security status
-                    setTimeout(checkSecurityStatus, 2000);
-                    
-                    // Clear form
-                    document.getElementById('rotateCredentialsForm').reset();
-                }} else {{
-                    showMessage(`❌ Errore: ${{result.error}}`, 'error');
-                }}
-            }} catch (error) {{
-                showMessage('❌ Errore di connessione', 'error');
-            }}
-        }}
-        
-        function showError(message) {{
-            document.getElementById('securityStatus').innerHTML = `
-                <div class="status error">
-                    <p>${{message}}</p>
-                </div>
-            `;
-        }}
-    </script>
-    """
-    
-    return render_template_string(
-        BASE_TEMPLATE,
-        title="Sicurezza",
-        subtitle="Gestione sicurezza e credenziali",
-        content=Markup(content),
-        menu_html=Markup(menu_html),
-        menu_styles=Markup(get_menu_styles()),
-        menu_scripts=Markup(get_menu_scripts())
-    )
+
 
 @app.route('/message-manager')
 @require_auth
@@ -3135,7 +3007,7 @@ def message_manager():
                     <div class="card" style="margin-bottom: 15px;">
                         <div style="display: flex; justify-content: space-between; align-items: start;">
                             <div style="flex: 1;">
-                                <h3>${escapeHtml(chat.title)} ${getChatIcon(chat.type)}</h3>
+                                <h3>${escapeHtml(chat.title)} <span class="chat-icon">${getChatIcon(chat.type)}</span></h3>
                                 <p><strong>ID:</strong> <code>${chat.id}</code></p>
                                 <p><strong>Tipo:</strong> ${getChatTypeLabel(chat.type)}</p>
                                 ${chat.username ? `<p><strong>Username:</strong> @${chat.username}</p>` : ''}

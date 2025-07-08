@@ -43,11 +43,24 @@
 
         // API request helper
         async function makeRequest(url, options = {}) {
-            const token = localStorage.getItem('session_token') || localStorage.getItem('access_token');
             const headers = {
                 'Content-Type': 'application/json',
                 ...options.headers
             };
+            
+            // Get token from server session
+            let token = null;
+            try {
+                const tokenResponse = await fetch('/api/auth/session-token');
+                if (tokenResponse.ok) {
+                    const tokenData = await tokenResponse.json();
+                    if (tokenData.success) {
+                        token = tokenData.token;
+                    }
+                }
+            } catch (e) {
+                console.log('Could not get session token:', e);
+            }
             
             if (token) {
                 headers.Authorization = `Bearer ${token}`;
@@ -62,7 +75,7 @@
                 if (response.status === 401) {
                     localStorage.removeItem('access_token');
                     localStorage.removeItem('session_token');
-                    window.location.href = '/';
+                    window.location.href = '/login';
                     return null;
                 }
                 

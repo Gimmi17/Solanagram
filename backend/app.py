@@ -660,14 +660,30 @@ async def verify_telegram_code_async(phone: str, code: str) -> dict:
     password = verification_data.get("password")
     cached_code = verification_data.get("cached_code")
 
-    # Use file-based sessions like the working system
-    client = await get_telethon_client(phone, api_id, api_hash)
-    if not client:
+    # FIXED: Create a fresh client for verification to avoid asyncio loop conflicts
+    try:
+        # Clean up any existing client for this phone to avoid conflicts
+        if phone in active_clients:
+            try:
+                existing_client = active_clients[phone]
+                if existing_client.is_connected():
+                    await existing_client.disconnect()
+                del active_clients[phone]
+                logger.info(f"Cleaned up existing client for {phone}")
+            except Exception as e:
+                logger.warning(f"Error cleaning up existing client for {phone}: {e}")
+        
+        # Create a new client specifically for verification
+        session_file = os.path.join(SESSION_DIR, f"user_{hash_phone_number(phone)}.session")
+        client = TelegramClient(session_file, api_id, api_hash)
+        
+        # Connect the new client
+        await client.connect()
+        logger.info(f"Created fresh client for verification of {phone}")
+        
+    except Exception as e:
+        logger.error(f"Failed to create client for verification of {phone}: {e}")
         return {"success": False, "status": "error", "error": get_error_message('TELEGRAM_CLIENT_FAILED')}
-    
-    # FIXED: Ensure client is connected before verification
-    if not await ensure_client_connected(client, phone, max_attempts=3):
-        return {"success": False, "status": "error", "error": "Impossibile stabilire connessione per la verifica del codice"}
         
     try:
         await client.sign_in(phone=phone, code=code, phone_code_hash=phone_code_hash)
@@ -724,6 +740,14 @@ async def verify_telegram_code_async(phone: str, code: str) -> dict:
 
     # If sign in is successful, clean up Redis and find user in DB
     redis_conn.delete(verification_key)
+    
+    # Clean up the verification client
+    try:
+        if client.is_connected():
+            await client.disconnect()
+        logger.info(f"Cleaned up verification client for {phone}")
+    except Exception as e:
+        logger.warning(f"Error cleaning up verification client for {phone}: {e}")
     db = get_db_connection()
     if not db:
         return {"success": False, "status": "error", "error": get_error_message('DB_CONNECTION_FAILED')}
@@ -1205,6 +1229,14 @@ def login():
             cursor.execute("SELECT * FROM users WHERE phone = %s", (phone,))
             user = cursor.fetchone()
 
+        logger.info(f"Login attempt for phone: {phone}")
+        logger.info(f"User found: {user is not None}")
+        if user:
+            logger.info(f"User ID: {user['id']}")
+            logger.info(f"Has password hash: {user.get('password_hash') is not None}")
+            logger.info(f"Has API ID: {user.get('api_id') is not None}")
+            logger.info(f"Has API hash: {user.get('api_hash_encrypted') is not None}")
+
         if user and check_password_hash(user['password_hash'], password):
             if not user.get('api_id') or not user.get('api_hash_encrypted'):
                 return jsonify({"success": False, "status": "error", "error": get_error_message('API_CREDENTIALS_NOT_SET')}), 400
@@ -1218,7 +1250,6 @@ def login():
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
                     # If loop is running, create task instead of asyncio.run()
-                    import asyncio
                     import concurrent.futures
                     
                     # Use thread pool for async operation to avoid loop conflicts
@@ -1249,6 +1280,63 @@ def login():
     except Exception as e:
         logger.error(f"Login error for {phone}: {e}")
         return jsonify({"success": False, "status": "error", "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+@app.route('/api/auth/change-password', methods=['POST'])
+@jwt_required()
+def change_password():
+    """
+    Changes the user's password after verifying the current password
+    """
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    current_password = data.get('current_password')
+    new_password = data.get('new_password')
+    
+    if not current_password or not new_password:
+        return jsonify({"success": False, "error": "Password attuale e nuova password sono obbligatorie"}), 400
+    
+    if len(new_password) < 6:
+        return jsonify({"success": False, "error": "La nuova password deve essere di almeno 6 caratteri"}), 400
+    
+    db = get_db_connection()
+    if not db:
+        return jsonify({"success": False, "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+    
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get current user data
+            cursor.execute("SELECT * FROM users WHERE id = %s", (current_user_id,))
+            user = cursor.fetchone()
+            
+            if not user:
+                return jsonify({"success": False, "error": "Utente non trovato"}), 404
+            
+            # Verify current password
+            if not check_password_hash(user['password_hash'], current_password):
+                return jsonify({"success": False, "error": "Password attuale non corretta"}), 401
+            
+            # Check if new password is different from current
+            if check_password_hash(user['password_hash'], new_password):
+                return jsonify({"success": False, "error": "La nuova password deve essere diversa da quella attuale"}), 400
+            
+            # Generate new password hash
+            new_password_hash = generate_password_hash(new_password)
+            
+            # Update password in database
+            cursor.execute("UPDATE users SET password_hash = %s WHERE id = %s", (new_password_hash, current_user_id))
+            db.commit()
+            
+            logger.info(f"Password changed successfully for user ID {current_user_id}")
+            
+            return jsonify({
+                "success": True,
+                "message": "Password cambiata con successo"
+            }), 200
+            
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error changing password for user ID {current_user_id}: {e}")
+        return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
 
 @app.route('/api/auth/verify-code', methods=['POST'])
 def verify_code():
@@ -2394,7 +2482,14 @@ def check_cached_code():
     if not phone:
         return jsonify({"success": False, "error": "Numero di telefono richiesto"}), 400
     
+    redis_conn = get_redis_connection()
+    if not redis_conn:
+        return jsonify({"success": False, "error": "Errore di connessione Redis"}), 500
+    
+    # Check both cached_code and verification keys
     cached_code_data = get_cached_code(phone)
+    verification_key = f"verification:{phone}"
+    verification_data = redis_conn.get(verification_key)
     
     if cached_code_data:
         # Calculate remaining time
@@ -2406,6 +2501,19 @@ def check_cached_code():
                 "remaining_time": remaining_time,
                 "message": f"Codice in cache disponibile per {remaining_time} secondi"
             })
+    
+    if verification_data:
+        try:
+            # Check if verification data exists and is still valid (10 minutes)
+            data = json.loads(verification_data)
+            return jsonify({
+                "success": True,
+                "has_cached_code": True,
+                "remaining_time": 600,  # 10 minutes
+                "message": "Codice di verifica disponibile (dati di sessione)"
+            })
+        except (json.JSONDecodeError, KeyError):
+            pass
     
     return jsonify({
         "success": True,
@@ -2467,6 +2575,36 @@ def clear_cached_code():
         "success": True,
         "message": f"Codice in cache cancellato per {phone}"
     })
+
+@app.route('/api/auth/logout', methods=['POST'])
+@jwt_required()
+def logout():
+    """Logout user and clear session"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        # Get user phone for logging
+        db = get_db_connection()
+        if db:
+            with db.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute("SELECT phone FROM users WHERE id = %s", (current_user_id,))
+                user = cursor.fetchone()
+            
+            if user:
+                phone = user['phone']
+                logger.info(f"User logged out: {hash_phone_number(phone)}")
+        
+        # Clear any active sessions or tokens
+        # Note: JWT tokens are stateless, so we rely on client-side cleanup
+        
+        return jsonify({
+            "success": True,
+            "message": "Logout completato con successo"
+        }), 200
+        
+    except Exception as e:
+        logger.error(f"Error during logout: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
 
 # ============================================
 # Crypto Signal Processing Endpoints

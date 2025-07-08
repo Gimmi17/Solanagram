@@ -348,6 +348,29 @@ pre code {
 .d-flex { display: flex; }
 
 .flex-column { flex-direction: column; }
+
+/* Emoji size control */
+.emoji-small {
+    font-size: 0.8em;
+    vertical-align: middle;
+}
+
+.emoji-medium {
+    font-size: 1em;
+    vertical-align: middle;
+}
+
+.emoji-large {
+    font-size: 1.2em;
+    vertical-align: middle;
+}
+
+/* Chat icons in message manager */
+.chat-icon {
+    font-size: 0.9em;
+    vertical-align: middle;
+    margin-right: 8px;
+}
 .flex-row { flex-direction: row; }
 .justify-content-center { justify-content: center; }
 .justify-content-between { justify-content: space-between; }
