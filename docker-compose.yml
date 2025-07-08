@@ -141,6 +141,18 @@ services:
       ADMINER_DEFAULT_SERVER: solanagram-db
       ADMINER_DESIGN: pepa-linha
 
+  # 📝 Logger Image Builder
+  solanagram-logger-builder:
+    build:
+      context: .
+      dockerfile: docker/logger.Dockerfile
+    image: solanagram-logger:latest
+    container_name: solanagram-logger-builder
+    profiles:
+      - build-only
+    networks:
+      - solanagram-net
+
 networks:
   solanagram-net:
     driver: bridge

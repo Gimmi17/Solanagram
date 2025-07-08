@@ -4081,6 +4081,316 @@ def _update_container_elaborations(cursor, listener_id, container_name):
     except Exception as e:
         logger.error(f"Error updating container elaborations: {e}")
 
+# ============================================
+# 📝 LOGGING SYSTEM ENDPOINTS
+# ============================================
+
+@app.route('/api/logging/sessions', methods=['GET'])
+@jwt_required()
+def get_logging_sessions():
+    """Get all logging sessions for the current user"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT ls.*, 
+                       COUNT(ml.id) as total_messages,
+                       MAX(ml.message_date) as last_message_date
+                FROM logging_sessions ls
+                LEFT JOIN message_logs ml ON ls.id = ml.logging_session_id
+                WHERE ls.user_id = %s
+                GROUP BY ls.id
+                ORDER BY ls.created_at DESC
+            """, (current_user_id,))
+            
+            sessions = cursor.fetchall()
+            
+            return jsonify({
+                "success": True,
+                "sessions": [dict(session) for session in sessions]
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Error getting logging sessions: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/logging/sessions', methods=['POST'])
+@jwt_required()
+def create_logging_session():
+    """Create a new logging session for a chat"""
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    if not data or 'chat_id' not in data:
+        return jsonify({"success": False, "error": "chat_id is required"}), 400
+    
+    chat_id = data['chat_id']
+    chat_title = data.get('chat_title', '')
+    chat_username = data.get('chat_username', '')
+    chat_type = data.get('chat_type', 'unknown')
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Check if user already has an active session for this chat
+            cursor.execute("""
+                SELECT id FROM logging_sessions
+                WHERE user_id = %s AND chat_id = %s AND is_active = true
+            """, (current_user_id, chat_id))
+            
+            if cursor.fetchone():
+                return jsonify({
+                    "success": False, 
+                    "error": "Già esiste una sessione di logging attiva per questa chat"
+                }), 400
+            
+            # Get user credentials
+            cursor.execute("""
+                SELECT phone, api_id, api_hash_encrypted
+                FROM users WHERE id = %s
+            """, (current_user_id,))
+            
+            user = cursor.fetchone()
+            if not user:
+                return jsonify({"success": False, "error": "User not found"}), 404
+            
+            # Decrypt API hash
+            api_hash = decrypt_api_hash(user['api_hash_encrypted'])
+            
+            # Create logging container
+            from logging_manager import LoggingManager
+            logging_manager = LoggingManager()
+            
+            # Generate session string (you might want to implement this)
+            session_string = f"session_{current_user_id}_{chat_id}"
+            
+            success, message, container_name = logging_manager.create_logging_container(
+                user_id=current_user_id,
+                phone=user['phone'],
+                api_id=user['api_id'],
+                api_hash=api_hash,
+                session_string=session_string,
+                chat_id=str(chat_id),
+                chat_title=chat_title,
+                chat_username=chat_username,
+                chat_type=chat_type
+            )
+            
+            if not success:
+                return jsonify({"success": False, "error": message}), 500
+            
+            # Create logging session in database
+            cursor.execute("""
+                INSERT INTO logging_sessions 
+                (user_id, chat_id, chat_title, chat_username, chat_type, container_name, container_status)
+                VALUES (%s, %s, %s, %s, %s, %s, 'running')
+                RETURNING id
+            """, (current_user_id, chat_id, chat_title, chat_username, chat_type, container_name))
+            
+            session_id = cursor.fetchone()['id']
+            db.commit()
+            
+            return jsonify({
+                "success": True,
+                "session_id": session_id,
+                "container_name": container_name,
+                "message": "Sessione di logging creata con successo"
+            }), 201
+            
+    except Exception as e:
+        logger.error(f"Error creating logging session: {e}")
+        if db:
+            db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/logging/sessions/<int:session_id>/stop', methods=['POST'])
+@jwt_required()
+def stop_logging_session(session_id):
+    """Stop a logging session"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Verify ownership and get session info
+            cursor.execute("""
+                SELECT * FROM logging_sessions
+                WHERE id = %s AND user_id = %s
+            """, (session_id, current_user_id))
+            
+            session = cursor.fetchone()
+            if not session:
+                return jsonify({"success": False, "error": "Session not found"}), 404
+            
+            if not session['is_active']:
+                return jsonify({"success": False, "error": "Session already stopped"}), 400
+            
+            # Stop container
+            from logging_manager import LoggingManager
+            logging_manager = LoggingManager()
+            
+            success, message = logging_manager.stop_and_remove_container(session['container_name'])
+            
+            # Update session status
+            cursor.execute("""
+                UPDATE logging_sessions
+                SET is_active = false, container_status = 'stopped', updated_at = NOW()
+                WHERE id = %s
+            """, (session_id,))
+            
+            db.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "Sessione di logging fermata con successo"
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Error stopping logging session: {e}")
+        if db:
+            db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/logging/sessions/<int:session_id>', methods=['DELETE'])
+@jwt_required()
+def delete_logging_session(session_id):
+    """Delete a logging session and all its logs"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Verify ownership
+            cursor.execute("""
+                SELECT * FROM logging_sessions
+                WHERE id = %s AND user_id = %s
+            """, (session_id, current_user_id))
+            
+            session = cursor.fetchone()
+            if not session:
+                return jsonify({"success": False, "error": "Session not found"}), 404
+            
+            # Stop container if still running
+            if session['is_active'] and session['container_name']:
+                from logging_manager import LoggingManager
+                logging_manager = LoggingManager()
+                logging_manager.stop_and_remove_container(session['container_name'])
+            
+            # Delete all logs for this session
+            cursor.execute("DELETE FROM message_logs WHERE logging_session_id = %s", (session_id,))
+            
+            # Delete session
+            cursor.execute("DELETE FROM logging_sessions WHERE id = %s", (session_id,))
+            
+            db.commit()
+            
+            return jsonify({
+                "success": True,
+                "message": "Sessione di logging eliminata con successo"
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Error deleting logging session: {e}")
+        if db:
+            db.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/logging/messages/<int:session_id>', methods=['GET'])
+@jwt_required()
+def get_logged_messages(session_id):
+    """Get logged messages for a specific session"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Verify ownership
+            cursor.execute("""
+                SELECT ls.* FROM logging_sessions ls
+                WHERE ls.id = %s AND ls.user_id = %s
+            """, (session_id, current_user_id))
+            
+            session = cursor.fetchone()
+            if not session:
+                return jsonify({"success": False, "error": "Session not found"}), 404
+            
+            # Get messages with pagination
+            page = request.args.get('page', 1, type=int)
+            per_page = request.args.get('per_page', 50, type=int)
+            offset = (page - 1) * per_page
+            
+            cursor.execute("""
+                SELECT * FROM message_logs
+                WHERE logging_session_id = %s
+                ORDER BY message_date DESC
+                LIMIT %s OFFSET %s
+            """, (session_id, per_page, offset))
+            
+            messages = cursor.fetchall()
+            
+            # Get total count
+            cursor.execute("""
+                SELECT COUNT(*) as total FROM message_logs
+                WHERE logging_session_id = %s
+            """, (session_id,))
+            
+            total = cursor.fetchone()['total']
+            
+            return jsonify({
+                "success": True,
+                "messages": [dict(msg) for msg in messages],
+                "pagination": {
+                    "page": page,
+                    "per_page": per_page,
+                    "total": total,
+                    "pages": (total + per_page - 1) // per_page
+                }
+            }), 200
+            
+    except Exception as e:
+        logger.error(f"Error getting logged messages: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/logging/chat/<chat_id>/status', methods=['GET'])
+@jwt_required()
+def get_chat_logging_status(chat_id):
+    """Get logging status for a specific chat"""
+    current_user_id = get_jwt_identity()
+    
+    try:
+        db = get_db_connection()
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT ls.*, COUNT(ml.id) as total_messages
+                FROM logging_sessions ls
+                LEFT JOIN message_logs ml ON ls.id = ml.logging_session_id
+                WHERE ls.user_id = %s AND ls.chat_id = %s
+                GROUP BY ls.id
+                ORDER BY ls.created_at DESC
+                LIMIT 1
+            """, (current_user_id, chat_id))
+            
+            session = cursor.fetchone()
+            
+            if session:
+                return jsonify({
+                    "success": True,
+                    "has_active_session": session['is_active'],
+                    "session": dict(session)
+                }), 200
+            else:
+                return jsonify({
+                    "success": True,
+                    "has_active_session": False,
+                    "session": None
+                }), 200
+            
+    except Exception as e:
+        logger.error(f"Error getting chat logging status: {e}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
 if __name__ == '__main__':
     app = create_app()
     app.run(host='0.0.0.0', port=5000, debug=True) 
