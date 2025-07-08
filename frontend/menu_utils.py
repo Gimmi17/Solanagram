@@ -20,7 +20,7 @@ def get_unified_menu(current_page: Optional[str] = None) -> str:
         HTML string for the unified corporate menu
     """
     
-    # Menu items configuration with SVG icons
+    # Menu items configuration with SVG icons - Simplified menu
     menu_items = [
         {
             "url": "/dashboard", 
@@ -49,51 +49,6 @@ def get_unified_menu(current_page: Optional[str] = None) -> str:
             </svg>''', 
             "text": "Le mie Chat", 
             "id": "chats"
-        },
-        {
-            "url": "/message-manager", 
-            "icon": '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
-                <polyline points="22,6 12,13 2,6"></polyline>
-            </svg>''', 
-            "text": "Gestione Messaggi", 
-            "id": "message-manager"
-        },
-        {
-            "url": "/configured-channels", 
-            "icon": '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="17,1 21,5 17,9"></polyline>
-                <path d="M3 11V9a4 4 0 0 1 4-4h14"></path>
-                <polyline points="7,23 3,19 7,15"></polyline>
-                <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
-            </svg>''', 
-            "text": "Reindirizzamenti", 
-            "id": "configured-channels"
-        },
-        {
-            "url": "/crypto-dashboard", 
-            "icon": '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path>
-            </svg>''', 
-            "text": "Crypto", 
-            "id": "crypto-dashboard"
-        },
-        {
-            "url": "/find", 
-            "icon": '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="11" cy="11" r="8"></circle>
-                <path d="M21 21l-4.35-4.35"></path>
-            </svg>''', 
-            "text": "Trova Chat", 
-            "id": "find"
-        },
-        {
-            "url": "/security", 
-            "icon": '''<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-            </svg>''', 
-            "text": "Sicurezza", 
-            "id": "security"
         }
     ]
     
