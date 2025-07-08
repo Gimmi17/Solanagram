@@ -187,14 +187,15 @@ def get_menu_styles() -> str:
         }
         
         .brand-icon {
-            width: 32px;
-            height: 32px;
+            width: 40px;
+            height: 40px;
             color: rgba(255, 255, 255, 0.9);
         }
         
         .brand-text {
             font-family: 'Segoe UI', system-ui, sans-serif;
             letter-spacing: -0.5px;
+            font-size: 2rem;
         }
         
         .nav-menu {
@@ -331,8 +332,12 @@ def get_menu_styles() -> str:
             }
             
             .brand-icon {
-                width: 28px;
-                height: 28px;
+                width: 32px;
+                height: 32px;
+            }
+            
+            .brand-text {
+                font-size: 1.5rem;
             }
             
             .nav-menu {
@@ -389,8 +394,12 @@ def get_menu_styles() -> str:
             }
             
             .brand-icon {
-                width: 24px;
-                height: 24px;
+                width: 28px;
+                height: 28px;
+            }
+            
+            .brand-text {
+                font-size: 1.1rem;
             }
             
             .nav-menu {
