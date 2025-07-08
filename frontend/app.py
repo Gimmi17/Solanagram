@@ -835,7 +835,10 @@ def login():
         BASE_TEMPLATE,
         title="Login",
         subtitle="Accedi alla piattaforma",
-        content=Markup(content)
+        content=Markup(content),
+        menu_html=Markup(""),
+        menu_styles=Markup(""),
+        menu_scripts=Markup("")
     )
 
 @app.route('/register')
@@ -940,7 +943,10 @@ def register():
         BASE_TEMPLATE,
         title="Registrazione",
         subtitle="Crea un nuovo account",
-        content=Markup(content)
+        content=Markup(content),
+        menu_html=Markup(""),
+        menu_styles=Markup(""),
+        menu_scripts=Markup("")
     )
 
 @app.route('/verify-code')
@@ -1062,7 +1068,10 @@ def verify_code():
         BASE_TEMPLATE,
         title="Verifica Codice",
         subtitle="Attivazione sessione Telegram",
-        content=Markup(content)
+        content=Markup(content),
+        menu_html=Markup(""),
+        menu_styles=Markup(""),
+        menu_scripts=Markup("")
     )
 
 # ============================================
