@@ -783,6 +783,13 @@ async def get_user_chats_async(phone: str) -> dict:
     api_hash = decrypt_api_hash(user_creds['api_hash_encrypted'])
 
     # Use file-based sessions for chat loading (like the working system)
+    # Clean up any existing client to avoid event loop conflicts
+    if phone in active_clients:
+        try:
+            await cleanup_phone_completely(phone)
+        except:
+            pass  # Ignore cleanup errors
+    
     client = await get_telethon_client(phone, api_id, api_hash)
     if not client or not await client.is_user_authorized():
         logger.error(f"User {phone} is not authorized. Please log in again.")
@@ -791,26 +798,42 @@ async def get_user_chats_async(phone: str) -> dict:
     chats = []
     try:
         async for dialog in client.iter_dialogs():
-            if dialog.is_group or dialog.is_channel:
-                # Get entity for more details
-                entity = dialog.entity
-                chat_type = "private"
-                if dialog.is_channel:
-                    chat_type = "channel"
-                elif dialog.is_group:
-                    chat_type = "supergroup" if hasattr(entity, 'megagroup') and entity.megagroup else "group"
-                
-                chat_data = {
-                    "id": dialog.id,
-                    "title": dialog.name or "Unnamed Chat",
-                    "type": chat_type,
-                    "username": getattr(entity, 'username', None),
-                    "members_count": getattr(entity, 'participants_count', None),
-                    "description": getattr(entity, 'about', None),
-                    "unread_count": dialog.unread_count if hasattr(dialog, 'unread_count') else 0,
-                    "last_message_date": dialog.date.isoformat() if dialog.date else None
-                }
-                chats.append(chat_data)
+            # Include TUTTE le chat: gruppi, canali, persone e bot
+            entity = dialog.entity
+            
+            # Determina il tipo di chat
+            chat_type = "private"
+            if dialog.is_channel:
+                chat_type = "channel"
+            elif dialog.is_group:
+                chat_type = "supergroup" if hasattr(entity, 'megagroup') and entity.megagroup else "group"
+            elif hasattr(entity, 'bot') and entity.bot:
+                chat_type = "bot"
+            elif hasattr(entity, 'user_id'):
+                chat_type = "user"
+            
+            # Determina il titolo
+            title = dialog.name
+            if not title and hasattr(entity, 'first_name'):
+                title = entity.first_name
+                if hasattr(entity, 'last_name') and entity.last_name:
+                    title += f" {entity.last_name}"
+            if not title:
+                title = "Unnamed Chat"
+            
+            chat_data = {
+                "id": dialog.id,
+                "title": title,
+                "type": chat_type,
+                "username": getattr(entity, 'username', None),
+                "members_count": getattr(entity, 'participants_count', None),
+                "description": getattr(entity, 'about', None),
+                "unread_count": dialog.unread_count if hasattr(dialog, 'unread_count') else 0,
+                "last_message_date": dialog.date.isoformat() if dialog.date else None,
+                "is_bot": getattr(entity, 'bot', False),
+                "is_user": hasattr(entity, 'user_id') and not getattr(entity, 'bot', False)
+            }
+            chats.append(chat_data)
         
         logger.info(f"Found {len(chats)} chats for user {phone}")
         return {"success": True, "chats": chats}
@@ -1452,68 +1475,7 @@ def user_profile():
             logger.error(f"Error updating user profile for ID {current_user_id}: {e}")
             return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
 
-@app.route('/api/user/change-password', methods=['POST'])
-@jwt_required()
-def change_password():
-    """Change user password"""
-    current_user_id = get_jwt_identity()
-    db = get_db_connection()
-    
-    if not db:
-        return jsonify({"success": False, "error": get_error_message('DB_CONNECTION_FAILED')}), 500
-    
-    data = request.get_json()
-    current_password = data.get('current_password')
-    new_password = data.get('new_password')
-    confirm_password = data.get('confirm_password')
-    
-    # Validation
-    if not current_password or not new_password or not confirm_password:
-        return jsonify({"success": False, "error": "Tutti i campi sono obbligatori"}), 400
-    
-    if new_password != confirm_password:
-        return jsonify({"success": False, "error": "Le nuove password non coincidono"}), 400
-    
-    if len(new_password) < 6:
-        return jsonify({"success": False, "error": "La nuova password deve essere di almeno 6 caratteri"}), 400
-    
-    try:
-        with db.cursor(cursor_factory=RealDictCursor) as cursor:
-            # Get current user password hash
-            cursor.execute("""
-                SELECT password_hash FROM users WHERE id = %s
-            """, (current_user_id,))
-            user = cursor.fetchone()
-            
-            if not user:
-                return jsonify({"success": False, "error": "Utente non trovato"}), 404
-            
-            # Verify current password
-            if not check_password_hash(user['password_hash'], current_password):
-                return jsonify({"success": False, "error": "Password attuale non corretta"}), 400
-            
-            # Hash new password
-            new_password_hash = generate_password_hash(new_password)
-            
-            # Update password
-            cursor.execute("""
-                UPDATE users 
-                SET password_hash = %s 
-                WHERE id = %s
-            """, (new_password_hash, current_user_id))
-            
-            db.commit()
-            
-            logger.info(f"Password changed successfully for user ID {current_user_id}")
-            return jsonify({
-                "success": True,
-                "message": "Password aggiornata con successo"
-            }), 200
-            
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error changing password for user ID {current_user_id}: {e}")
-        return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
 
 @app.route('/api/user/chats', methods=['GET'])
 @jwt_required()
@@ -1535,7 +1497,20 @@ def get_user_chats():
     logger.info(f"Fetching chats for user {phone} (ID: {current_user_id})")
 
     try:
-        result = asyncio.run(get_user_chats_async(phone))
+        # Gestione event loop per evitare conflitti
+        try:
+            # Prova prima con un nuovo loop isolato
+            result = asyncio.run(get_user_chats_async(phone))
+        except RuntimeError as e:
+            if "event loop is already running" in str(e):
+                # Se c'è già un loop attivo, usa un nuovo thread
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, get_user_chats_async(phone))
+                    result = future.result(timeout=60)
+            else:
+                raise e
+            
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error fetching user chats: {e}", exc_info=True)

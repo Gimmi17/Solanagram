@@ -1395,11 +1395,11 @@ def profile():
                     showMessage(result.error || 'Errore durante l\'aggiornamento', 'error');
                 }}
                 
-                            }} catch (error) {{
-                    hideLoading();
-                    showMessage('Errore di connessione', 'error');
-                }}
-            }});
+            }} catch (error) {{
+                hideLoading();
+                showMessage('Errore di connessione', 'error');
+            }}
+        }});
             
             document.getElementById('changePasswordForm').addEventListener('submit', async (e) => {{
                 e.preventDefault();
@@ -1644,6 +1644,8 @@ def chats_list():
         function getChatIcon(type) {{
             switch(type) {{
                 case 'private': return '👤';
+                case 'user': return '👤';
+                case 'bot': return '🤖';
                 case 'group': return '👥';
                 case 'supergroup': return '👥';
                 case 'channel': return '📢';
@@ -1654,6 +1656,8 @@ def chats_list():
         function getChatTypeLabel(type) {{
             switch(type) {{
                 case 'private': return 'Chat privata';
+                case 'user': return 'Persona';
+                case 'bot': return 'Bot';
                 case 'group': return 'Gruppo';
                 case 'supergroup': return 'Supergruppo';
                 case 'channel': return 'Canale';
@@ -1991,6 +1995,8 @@ def configured_channels():
         function getChatIcon(type) {{
             switch(type) {{
                 case 'private': return '👤';
+                case 'user': return '👤';
+                case 'bot': return '🤖';
                 case 'group': return '👥';
                 case 'supergroup': return '👥';
                 case 'channel': return '📢';
@@ -2595,6 +2601,8 @@ def forwarders_page(source_chat_id):
         function getChatIcon(type) {{
             switch(type) {{
                 case 'private': return '👤';
+                case 'user': return '👤';
+                case 'bot': return '🤖';
                 case 'group': return '👥';
                 case 'supergroup': return '👥';
                 case 'channel': return '📢';
@@ -2758,6 +2766,16 @@ def api_update_credentials():
     
     data = request.get_json()
     result = call_backend('/api/auth/update-credentials', 'PUT', data, auth_token=session['session_token'])
+    return jsonify(result or {'error': 'Backend non disponibile'})
+
+@app.route('/api/user/change-password', methods=['POST'])
+def api_change_password():
+    """Proxy per cambio password backend"""
+    if not is_authenticated():
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    data = request.get_json()
+    result = call_backend('/api/auth/change-password', 'POST', data, auth_token=session['session_token'])
     return jsonify(result or {'error': 'Backend non disponibile'})
 
 @app.route('/api/telegram/get-configured-channels', methods=['GET'])
@@ -3327,6 +3345,8 @@ def message_manager():
         function getChatIcon(type) {
             switch(type) {
                 case 'private': return '👤';
+                case 'user': return '👤';
+                case 'bot': return '🤖';
                 case 'group': return '👥';
                 case 'supergroup': return '👥';
                 case 'channel': return '📢';
@@ -3337,6 +3357,8 @@ def message_manager():
         function getChatTypeLabel(type) {
             switch(type) {
                 case 'private': return 'Chat privata';
+                case 'user': return 'Persona';
+                case 'bot': return 'Bot';
                 case 'group': return 'Gruppo';
                 case 'supergroup': return 'Supergruppo';
                 case 'channel': return 'Canale';
