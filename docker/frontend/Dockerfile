@@ -33,15 +33,12 @@ WORKDIR /app
 # ============================================
 FROM base as development
 
-# Copia e installa dipendenze produzione prima
-COPY requirements.txt ./
+# Copia tutti i file requirements prima
+COPY requirements*.txt ./
+
+# Installa dipendenze in ordine corretto
 RUN pip install -r requirements.txt
-
-# Poi installa dipendenze development e test
-COPY requirements-dev.txt ./
 RUN pip install -r requirements-dev.txt
-
-COPY requirements-test.txt ./
 RUN pip install -r requirements-test.txt
 
 # Copia codice frontend
