@@ -445,27 +445,33 @@ def get_menu_scripts() -> str:
         // Enhanced logout function with confirmation
         async function logout() {
             if (confirm('Sei sicuro di voler uscire?')) {
-                try {
-                    const result = await makeRequest('/api/auth/logout', {
-                        method: 'POST'
-                    });
-                    
-                    // Clear local storage
-                    localStorage.removeItem('access_token');
-                    localStorage.removeItem('session_token');
-                    
-                    // Redirect
-                    if (result && result.redirect) {
-                        window.location.href = result.redirect;
-                    } else {
+                // Use the global performLogout function if available
+                if (typeof performLogout === 'function') {
+                    await performLogout();
+                } else {
+                    // Fallback to manual logout
+                    try {
+                        const result = await makeRequest('/api/auth/logout', {
+                            method: 'POST'
+                        });
+                        
+                        // Clear local storage
+                        localStorage.removeItem('access_token');
+                        localStorage.removeItem('session_token');
+                        
+                        // Redirect
+                        if (result && result.redirect) {
+                            window.location.href = result.redirect;
+                        } else {
+                            window.location.href = '/login';
+                        }
+                    } catch (error) {
+                        console.error('Logout error:', error);
+                        // Force redirect even on error
+                        localStorage.removeItem('access_token');
+                        localStorage.removeItem('session_token');
                         window.location.href = '/login';
                     }
-                } catch (error) {
-                    console.error('Logout error:', error);
-                    // Force redirect even on error
-                    localStorage.removeItem('access_token');
-                    localStorage.removeItem('session_token');
-                    window.location.href = '/login';
                 }
             }
         }
