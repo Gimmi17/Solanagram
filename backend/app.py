@@ -248,36 +248,14 @@ async def cleanup_phone_completely(phone: str):
 async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string_session: bool = False) -> Optional[TelegramClient]:
     """
     Creates a new Telethon client for a given phone number.
-    Uses file-based sessions by default to avoid SQLite database locking issues.
-    Properly cleans up old clients to prevent connection conflicts.
-    FIXED: Improved client management and reduced race conditions.
+    OPTIMIZED: Uses intelligent caching and reduced timeouts for better performance.
     """
     try:
-        # Check if we already have a working client for this phone
-        if phone in active_clients:
-            existing_client = active_clients[phone]
-            try:
-                # Test if existing client is still working
-                if existing_client.is_connected():
-                    logger.info(f"Reusing existing connected client for {phone}")
-                    return existing_client
-                else:
-                    # Try to reconnect existing client
-                    await existing_client.connect()
-                    if existing_client.is_connected():
-                        logger.info(f"Reconnected existing client for {phone}")
-                        return existing_client
-            except Exception as e:
-                logger.warning(f"Existing client for {phone} failed, will create new one: {e}")
-                
-            # Clean up failed client
-            try:
-                if existing_client.is_connected():
-                    await existing_client.disconnect()
-            except:
-                pass
-            finally:
-                del active_clients[phone]
+        # Check cache first
+        cached_client = get_cached_client(phone)
+        if cached_client:
+            logger.info(f"Using cached client for {phone}")
+            return cached_client
 
         logger.info(f"Creating a new Telethon client for phone {phone} (string_session={use_string_session})")
         
@@ -291,7 +269,7 @@ async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string
                 try:
                     # Create a temporary client to extract the session string
                     temp_client = TelegramClient(session_file, api_id, api_hash)
-                    await asyncio.wait_for(temp_client.connect(), timeout=10.0)
+                    await asyncio.wait_for(temp_client.connect(), timeout=5.0)  # Reduced from 10.0 to 5.0
                     if temp_client.is_connected():
                         session_string = temp_client.session.save()
                         await temp_client.disconnect()
@@ -317,7 +295,7 @@ async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string
                 try:
                     # Test if session can be opened without issues
                     test_client = TelegramClient(session_file + "_test", api_id, api_hash)
-                    await test_client.connect()
+                    await asyncio.wait_for(test_client.connect(), timeout=5.0)  # Reduced from 10.0 to 5.0
                     await test_client.disconnect()
                     # Remove test session
                     test_session = session_file + "_test.session"
@@ -336,47 +314,31 @@ async def get_telethon_client(phone: str, api_id: int, api_hash: str, use_string
             
             client = TelegramClient(session_file, api_id, api_hash)
         
-        # FIXED: Reduced timeout and added better error handling
+        # OPTIMIZED: Reduced timeout and simplified connection
         try:
-            await asyncio.wait_for(client.connect(), timeout=15.0)
+            await asyncio.wait_for(client.connect(), timeout=8.0)  # Reduced from 15.0 to 8.0
         except asyncio.TimeoutError:
             logger.warning(f"First connection attempt timed out for {phone}, retrying...")
             # Second attempt with fresh client
             if not use_string_session:
                 session_file = os.path.join(SESSION_DIR, f"user_{hash_phone_number(phone)}.session")
                 client = TelegramClient(session_file, api_id, api_hash)
-            await asyncio.wait_for(client.connect(), timeout=10.0)
+            await asyncio.wait_for(client.connect(), timeout=5.0)  # Reduced from 10.0 to 5.0
         
         if not client.is_connected():
             raise Exception("Failed to establish connection to Telegram servers")
         
-        # FIXED: Shorter stabilization delay
-        await asyncio.sleep(0.2)
+        # OPTIMIZED: Simplified connection verification with single attempt
+        try:
+            await asyncio.wait_for(client.get_me(), timeout=5.0)  # Reduced from 8.0 to 5.0
+            logger.info(f"Client connection verified for {phone}")
+        except Exception as verify_error:
+            logger.warning(f"Connection verification failed for {phone}: {verify_error}")
+            # Continue anyway as the client might still work for basic operations
         
-        # FIXED: Enhanced connection verification with multiple attempts
-        connection_verified = False
-        for verify_attempt in range(3):
-            try:
-                await asyncio.wait_for(client.get_me(), timeout=8.0)
-                logger.info(f"Client connection verified for {phone} (attempt {verify_attempt + 1})")
-                connection_verified = True
-                break
-            except Exception as verify_error:
-                logger.warning(f"Connection verification attempt {verify_attempt + 1} failed for {phone}: {verify_error}")
-                if verify_attempt < 2:  # Try to reconnect if not last attempt
-                    try:
-                        await client.disconnect()
-                        await asyncio.sleep(0.5)  # Brief pause
-                        await asyncio.wait_for(client.connect(), timeout=10.0)
-                    except Exception as reconnect_error:
-                        logger.warning(f"Reconnection attempt failed for {phone}: {reconnect_error}")
-                        
-        if not connection_verified:
-            logger.warning(f"Could not verify client connection for {phone} after 3 attempts, but proceeding")
-        
-        # Store the new client
-        active_clients[phone] = client
-        logger.info(f"New client for {phone} created and connected.")
+        # Cache the new client
+        cache_client(phone, client)
+        logger.info(f"New client for {phone} created, connected, and cached.")
         return client
         
     except asyncio.TimeoutError:
@@ -487,7 +449,7 @@ def clear_cached_code(phone: str) -> None:
 async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, password: str) -> dict:
     """
     Initializes a client, sends a verification code, and stores necessary data in Redis.
-    Enhanced with detailed error messages and better error handling.
+    OPTIMIZED: Reduced timeouts and improved connection handling for better performance.
     """
     redis_conn = get_redis_connection()
     if not redis_conn:
@@ -520,8 +482,8 @@ async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, passw
             "cached": True
         }
 
-    # FIXED: Improved error handling and retry logic
-    max_retries = 2
+    # OPTIMIZED: Reduced retries and improved error handling
+    max_retries = 1  # Reduced from 2 to 1 for faster response
     last_error = None
     
     for attempt in range(max_retries):
@@ -536,8 +498,8 @@ async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, passw
                         pass
                     del active_clients[phone]
                 
-                # Short delay before retry
-                await asyncio.sleep(1.0)
+                # Shorter delay before retry
+                await asyncio.sleep(0.5)  # Reduced from 1.0 to 0.5
             
             client = await get_telethon_client(phone, api_id, api_hash)
             if not client:
@@ -546,28 +508,23 @@ async def send_telegram_code_async(phone: str, api_id: int, api_hash: str, passw
                     return {"success": False, "status": "error", "error": last_error}
                 continue
 
-            # FIXED: Use robust connection verification
-            if not await ensure_client_connected(client, phone, max_attempts=3):
-                last_error = "Impossibile stabilire una connessione stabile con Telegram"
-                if attempt == max_retries - 1:
-                    return {"success": False, "status": "error", "error": last_error}
-                continue
-
-            # FIXED: Enhanced send_code_request with connection safeguards
-            try:
-                # Final connection check before critical operation
-                if not client.is_connected():
-                    logger.error(f"Client unexpectedly disconnected for {phone} just before send_code_request")
-                    last_error = "Connessione interrotta inaspettatamente"
+            # OPTIMIZED: Simplified connection verification
+            if not client.is_connected():
+                try:
+                    await asyncio.wait_for(client.connect(), timeout=8.0)  # Reduced from 15.0 to 8.0
+                except asyncio.TimeoutError:
+                    last_error = "Timeout nella connessione a Telegram"
                     if attempt == max_retries - 1:
                         return {"success": False, "status": "error", "error": last_error}
                     continue
-                
-                # Send the code request with timeout
-                result = await asyncio.wait_for(client.send_code_request(phone, force_sms=True), timeout=15.0)
+
+            # OPTIMIZED: Faster send_code_request with shorter timeout
+            try:
+                # Send the code request with reduced timeout
+                result = await asyncio.wait_for(client.send_code_request(phone, force_sms=True), timeout=8.0)  # Reduced from 15.0 to 8.0
                 
             except asyncio.TimeoutError:
-                last_error = "Timeout while requesting verification code"
+                last_error = "Timeout durante l'invio del codice di verifica"
                 if attempt == max_retries - 1:
                     return {"success": False, "status": "error", "error": last_error}
                 continue
@@ -1234,17 +1191,24 @@ def login():
     """
     Handles user login. Does not start Telegram session, just verifies DB user
     and sends a verification code via Telegram.
+    OPTIMIZED: Includes performance metrics tracking.
     """
+    start_time = time.time()
+    
     data = request.get_json()
     # Supporta sia 'phone' che 'phone_number' per compatibilità
     phone = data.get('phone') or data.get('phone_number')
     password = data.get('password')
 
     if not phone or not password:
+        response_time = time.time() - start_time
+        record_login_metric(False, response_time)
         return jsonify({"success": False, "status": "error", "error": get_error_message('PHONE_PASSWORD_REQUIRED')}), 400
 
     db = get_db_connection()
     if not db:
+        response_time = time.time() - start_time
+        record_login_metric(False, response_time)
         return jsonify({"success": False, "status": "error", "error": get_error_message('DB_CONNECTION_FAILED')}), 500
         
     try:
@@ -1262,17 +1226,19 @@ def login():
 
         if user and check_password_hash(user['password_hash'], password):
             if not user.get('api_id') or not user.get('api_hash_encrypted'):
+                response_time = time.time() - start_time
+                record_login_metric(False, response_time)
                 return jsonify({"success": False, "status": "error", "error": get_error_message('API_CREDENTIALS_NOT_SET')}), 400
 
             api_id = user['api_id']
             api_hash = decrypt_api_hash(user['api_hash_encrypted'])
             
-            # FIXED: Better event loop management to avoid conflicts
+            # OPTIMIZED: Better event loop management to avoid conflicts
             try:
                 # Try to get existing event loop
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # If loop is running, create task instead of asyncio.run()
+                    # If loop is running, use asyncio.create_task for better performance
                     import concurrent.futures
                     
                     # Use thread pool for async operation to avoid loop conflicts
@@ -1281,7 +1247,7 @@ def login():
                             asyncio.run, 
                             send_telegram_code_async(phone, api_id, api_hash, password)
                         )
-                        result = future.result(timeout=60)  # 60 second timeout
+                        result = future.result(timeout=30)  # Reduced from 60 to 30 seconds
                 else:
                     # No running loop, safe to use asyncio.run()
                     result = asyncio.run(send_telegram_code_async(phone, api_id, api_hash, password))
@@ -1294,13 +1260,21 @@ def login():
                 finally:
                     loop.close()
             
+            response_time = time.time() - start_time
+            
             if result.get("success"):
+                record_login_metric(True, response_time)
                 return jsonify({"success": True, "status": "success", "message": result.get("message")})
             else:
+                record_login_metric(False, response_time)
                 return jsonify(result), 400
         else:
+            response_time = time.time() - start_time
+            record_login_metric(False, response_time)
             return jsonify({"success": False, "status": "error", "error": get_error_message('INVALID_CREDENTIALS')}), 401
     except Exception as e:
+        response_time = time.time() - start_time
+        record_login_metric(False, response_time)
         logger.error(f"Login error for {phone}: {e}")
         return jsonify({"success": False, "status": "error", "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
 
@@ -4365,6 +4339,128 @@ def get_chat_logging_status(chat_id):
     except Exception as e:
         logger.error(f"Error getting chat logging status: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+# ========================================================================================
+# CLIENT CACHE SYSTEM
+# ========================================================================================
+
+# Global client cache to avoid recreating clients unnecessarily
+active_clients = {}
+client_cache_ttl = 300  # 5 minutes cache TTL
+
+async def cleanup_expired_clients():
+    """Clean up expired clients from cache"""
+    current_time = time.time()
+    expired_phones = []
+    
+    for phone, client_data in active_clients.items():
+        if current_time - client_data.get('created_at', 0) > client_cache_ttl:
+            expired_phones.append(phone)
+    
+    for phone in expired_phones:
+        try:
+            client = active_clients[phone]['client']
+            if client.is_connected():
+                await client.disconnect()
+        except:
+            pass
+        finally:
+            del active_clients[phone]
+            logger.info(f"Cleaned up expired client for {phone}")
+
+def get_cached_client(phone: str) -> Optional[TelegramClient]:
+    """Get cached client if still valid"""
+    if phone in active_clients:
+        client_data = active_clients[phone]
+        current_time = time.time()
+        
+        # Check if client is still within TTL
+        if current_time - client_data.get('created_at', 0) <= client_cache_ttl:
+            client = client_data['client']
+            if client.is_connected():
+                return client
+    
+    return None
+
+def cache_client(phone: str, client: TelegramClient):
+    """Cache a client with timestamp"""
+    active_clients[phone] = {
+        'client': client,
+        'created_at': time.time()
+    }
+
+# ========================================================================================
+# AUTOMATIC CLEANUP SYSTEM
+# ========================================================================================
+
+import threading
+import time
+
+def start_cleanup_thread():
+    """Start background thread for cleaning up expired clients"""
+    def cleanup_loop():
+        while True:
+            try:
+                # Run cleanup every 2 minutes
+                time.sleep(120)
+                asyncio.run(cleanup_expired_clients())
+            except Exception as e:
+                logger.error(f"Error in cleanup loop: {e}")
+    
+    cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True)
+    cleanup_thread.start()
+    logger.info("Started automatic client cleanup thread")
+
+# Start cleanup thread when module is imported
+start_cleanup_thread()
+
+# ========================================================================================
+# PERFORMANCE METRICS
+# ========================================================================================
+
+import time
+from collections import defaultdict
+
+# Performance metrics storage
+login_metrics = {
+    'total_requests': 0,
+    'successful_requests': 0,
+    'failed_requests': 0,
+    'average_response_time': 0,
+    'response_times': [],
+    'last_10_times': []
+}
+
+def record_login_metric(success: bool, response_time: float):
+    """Record login performance metric"""
+    login_metrics['total_requests'] += 1
+    login_metrics['response_times'].append(response_time)
+    
+    if success:
+        login_metrics['successful_requests'] += 1
+    else:
+        login_metrics['failed_requests'] += 1
+    
+    # Keep only last 100 response times
+    if len(login_metrics['response_times']) > 100:
+        login_metrics['response_times'] = login_metrics['response_times'][-100:]
+    
+    # Calculate average
+    if login_metrics['response_times']:
+        login_metrics['average_response_time'] = sum(login_metrics['response_times']) / len(login_metrics['response_times'])
+    
+    # Keep last 10 times for recent performance
+    login_metrics['last_10_times'] = login_metrics['response_times'][-10:]
+
+@app.route('/api/metrics/login-performance', methods=['GET'])
+def get_login_metrics():
+    """Get login performance metrics"""
+    return jsonify({
+        "success": True,
+        "metrics": login_metrics,
+        "success_rate": (login_metrics['successful_requests'] / max(login_metrics['total_requests'], 1)) * 100,
+        "recent_average": sum(login_metrics['last_10_times']) / max(len(login_metrics['last_10_times']), 1)
+    })
 
 if __name__ == '__main__':
     app = create_app()

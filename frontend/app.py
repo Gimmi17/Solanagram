@@ -386,8 +386,8 @@ BASE_TEMPLATE = """
     {{ menu_scripts|safe }}
     
     <script>
-        // Enhanced makeRequest function
-        async function makeRequest(url, options = {}) {
+        // Enhanced makeRequest function with custom timeout support
+        async function makeRequest(url, options = {}, timeout = 30000) {
             try {
                 console.log('makeRequest - URL:', url);
                 
@@ -396,10 +396,17 @@ BASE_TEMPLATE = """
                     ...options.headers
                 };
                 
+                // Create AbortController for timeout
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), timeout);
+                
                 const response = await fetch(url, {
                     ...options,
-                    headers
+                    headers,
+                    signal: controller.signal
                 });
+                
+                clearTimeout(timeoutId);
                 
                 if (response.status === 401) {
                     localStorage.removeItem('access_token');
@@ -413,6 +420,14 @@ BASE_TEMPLATE = """
                 return jsonResult;
             } catch (error) {
                 console.error('makeRequest - Error:', error);
+                
+                // Check if it's a timeout error
+                if (error.name === 'AbortError') {
+                    const timeoutError = new Error('Request timeout');
+                    timeoutError.name = 'TimeoutError';
+                    throw timeoutError;
+                }
+                
                 return { error: 'Errore di connessione' };
             }
         }
@@ -770,9 +785,25 @@ def login():
                 return;
             }
             
-            // FIXED: Better UX with informative loading message
+            // OPTIMIZED: Better UX with informative loading message and The Good Place reference
             showLoading();
-            showMessage('🔄 Connessione a Telegram in corso... Il sistema effettuerà automaticamente dei tentativi per garantire una connessione stabile.', 'info');
+            showMessage('🔄 Connessione a Telegram in corso... <br><br><strong style="color: #10b981; background: #d1fae5; padding: 8px; border-radius: 6px; display: inline-block; margin-top: 8px;">✨ "Everything is fine" - The Good Place ✨</strong><br><small>Il sistema effettuerà automaticamente dei tentativi per garantire una connessione stabile.</small>', 'info');
+            
+            // Progress feedback system
+            const progressMessages = [
+                '🔍 Verifica credenziali...',
+                '📡 Connessione ai server Telegram...',
+                '📱 Invio codice di verifica...',
+                '✅ Completamento...'
+            ];
+            
+            let messageIndex = 0;
+            const progressInterval = setInterval(() => {
+                if (messageIndex < progressMessages.length) {
+                    showMessage(`🔄 ${progressMessages[messageIndex]} <br><br><strong style="color: #10b981; background: #d1fae5; padding: 8px; border-radius: 6px; display: inline-block; margin-top: 8px;">✨ "Everything is fine" - The Good Place ✨</strong>`, 'info');
+                    messageIndex++;
+                }
+            }, 2000);
             
             try {
                 const result = await makeRequest('/api/auth/login', {
@@ -781,7 +812,7 @@ def login():
                         phone_number: phone,
                         password: password 
                     })
-                });
+                }, null, 25000); // 25 second timeout instead of default
                 
                 hideLoading();
                 
@@ -825,7 +856,15 @@ def login():
             } catch (error) {
                 hideLoading();
                 console.error('Login error:', error);
-                showMessage('❌ Errore di connessione. Riprova tra qualche secondo.', 'error');
+                
+                // Check if it's a timeout error
+                if (error.name === 'TimeoutError' || error.message.includes('timeout')) {
+                    showMessage('⏰ Timeout nella connessione. Il server Telegram potrebbe essere temporaneamente lento. <br><br><strong style="color: #10b981; background: #d1fae5; padding: 8px; border-radius: 6px; display: inline-block; margin-top: 8px;">✨ "Everything is fine" - The Good Place ✨</strong><br><small>Riprova tra qualche secondo.</small>', 'warning');
+                } else {
+                    showMessage('❌ Errore di connessione. Riprova tra qualche secondo.', 'error');
+                }
+            } finally {
+                clearInterval(progressInterval);
             }
         });
     </script>
@@ -5048,6 +5087,119 @@ def proxy_get_chat_logging_status(chat_id):
         return jsonify(response), 200
     else:
         return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/metrics/login-performance', methods=['GET'])
+def api_get_login_metrics():
+    """Proxy endpoint for login performance metrics"""
+    return call_backend('/api/metrics/login-performance', 'GET')
+
+@app.route('/performance-metrics')
+@require_auth
+def performance_metrics():
+    """Pagina per visualizzare le metriche di performance"""
+    content = """
+    <h2>📊 Metriche di Performance</h2>
+    
+    <div class="status info">
+        ℹ️ Monitoraggio delle performance del sistema di login
+    </div>
+    
+    <div class="content-section">
+        <h3>🔍 Metriche del Login</h3>
+        <div id="loginMetrics">
+            <div class="loading">
+                <div class="spinner"></div>
+                <p>Caricamento metriche...</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        async function loadLoginMetrics() {
+            try {
+                const result = await makeRequest('/api/metrics/login-performance', {
+                    method: 'GET'
+                });
+                
+                if (result.success) {
+                    const metrics = result.metrics;
+                    const successRate = result.success_rate.toFixed(2);
+                    const recentAvg = result.recent_average.toFixed(2);
+                    
+                    document.getElementById('loginMetrics').innerHTML = `
+                        <div class="metrics-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin-top: 1rem;">
+                            <div class="metric-card" style="background: #f8fafc; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #3b82f6;">
+                                <h4 style="margin: 0 0 0.5rem 0; color: #1e293b;">📈 Richieste Totali</h4>
+                                <p style="font-size: 2rem; font-weight: bold; margin: 0; color: #3b82f6;">${metrics.total_requests}</p>
+                            </div>
+                            
+                            <div class="metric-card" style="background: #f0fdf4; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #10b981;">
+                                <h4 style="margin: 0 0 0.5rem 0; color: #1e293b;">✅ Successi</h4>
+                                <p style="font-size: 2rem; font-weight: bold; margin: 0; color: #10b981;">${metrics.successful_requests}</p>
+                            </div>
+                            
+                            <div class="metric-card" style="background: #fef2f2; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #ef4444;">
+                                <h4 style="margin: 0 0 0.5rem 0; color: #1e293b;">❌ Fallimenti</h4>
+                                <p style="font-size: 2rem; font-weight: bold; margin: 0; color: #ef4444;">${metrics.failed_requests}</p>
+                            </div>
+                            
+                            <div class="metric-card" style="background: #fefce8; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #eab308;">
+                                <h4 style="margin: 0 0 0.5rem 0; color: #1e293b;">📊 Tasso di Successo</h4>
+                                <p style="font-size: 2rem; font-weight: bold; margin: 0; color: #eab308;">${successRate}%</p>
+                            </div>
+                            
+                            <div class="metric-card" style="background: #eff6ff; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #3b82f6;">
+                                <h4 style="margin: 0 0 0.5rem 0; color: #1e293b;">⏱️ Tempo Medio</h4>
+                                <p style="font-size: 2rem; font-weight: bold; margin: 0; color: #3b82f6;">${metrics.average_response_time.toFixed(2)}s</p>
+                            </div>
+                            
+                            <div class="metric-card" style="background: #f0f9ff; padding: 1.5rem; border-radius: 8px; border-left: 4px solid #0ea5e9;">
+                                <h4 style="margin: 0 0 0.5rem 0; color: #1e293b;">⚡ Media Recente</h4>
+                                <p style="font-size: 2rem; font-weight: bold; margin: 0; color: #0ea5e9;">${recentAvg}s</p>
+                            </div>
+                        </div>
+                        
+                        <div style="margin-top: 2rem;">
+                            <h4>📈 Ultimi 10 Tempi di Risposta</h4>
+                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem;">
+                                ${metrics.last_10_times.map(time => 
+                                    `<span style="background: #e0e7ff; color: #3730a3; padding: 0.5rem; border-radius: 4px; font-weight: 500;">${time.toFixed(2)}s</span>`
+                                ).join('')}
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    document.getElementById('loginMetrics').innerHTML = `
+                        <div class="status error">
+                            ❌ Errore nel caricamento delle metriche: ${result.error || 'Errore sconosciuto'}
+                        </div>
+                    `;
+                }
+            } catch (error) {
+                document.getElementById('loginMetrics').innerHTML = `
+                    <div class="status error">
+                        ❌ Errore di connessione nel caricamento delle metriche
+                    </div>
+                `;
+            }
+        }
+        
+        // Load metrics on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadLoginMetrics();
+            
+            // Refresh metrics every 30 seconds
+            setInterval(loadLoginMetrics, 30000);
+        });
+    </script>
+    """
+    
+    return render_template_string(BASE_TEMPLATE, 
+        title="Metriche Performance",
+        content=Markup(content),
+        menu_styles=Markup(get_menu_styles()),
+        menu_scripts=Markup(get_menu_scripts())
+    )
 
 if __name__ == '__main__':
     logger.info("🌐 Starting Telegram Chat Manager Frontend")
