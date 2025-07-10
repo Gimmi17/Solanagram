@@ -617,218 +617,7 @@ def login():
         </div>
     </form>
     
-    <script>
-        let currentPhone = '';
-        let currentPassword = '';
-        
-        // Controlla se esiste un codice in cache quando l'utente inserisce il numero
-        document.getElementById('phone_number').addEventListener('blur', async function() {
-            const phone = this.value.trim();
-            if (phone) {
-                try {
-                    const result = await makeRequest(`/api/auth/check-future-tokens?phone=${encodeURIComponent(phone)}`, {
-                        method: 'GET'
-                    });
-                    
-                    if (result.success && result.has_future_tokens) {
-                        document.getElementById('futureTokensSection').style.display = 'block';
-                        currentPhone = phone;
-                    } else {
-                        document.getElementById('futureTokensSection').style.display = 'none';
-                    }
-                } catch (error) {
-                    console.log('Errore nel controllo future tokens:', error);
-                }
-            }
-        });
-        
-        // Usa future auth tokens
-        document.getElementById('useFutureTokens').addEventListener('click', async function() {
-            const password = document.getElementById('password').value.trim();
-            
-            if (!currentPhone || !password) {
-                showMessage('Inserisci numero di telefono e password', 'error');
-                return;
-            }
-            
-            showLoading();
-            
-            try {
-                const result = await makeRequest('/api/auth/login', {
-                    method: 'POST',
-                    body: JSON.stringify({ 
-                        phone_number: currentPhone,
-                        password: password 
-                    })
-                });
-                
-                if (result.success) {
-                    if (result.direct_login) {
-                        // Login diretto con token
-                        showMessage(result.message, 'success');
-                        setTimeout(() => {
-                            window.location.href = '/dashboard';
-                        }, 2000);
-                    } else {
-                        // Salva dati per la verifica
-                        localStorage.setItem('temp_phone', currentPhone);
-                        showMessage(result.message, 'success');
-                        setTimeout(() => {
-                            window.location.href = '/verify-code';
-                        }, 2000);
-                    }
-                } else {
-                    showMessage(result.error || 'Errore nel login', 'error');
-                }
-            } catch (error) {
-                showMessage('Errore di connessione', 'error');
-            }
-            
-            hideLoading();
-        });
-        
-        // Richiedi nuovo codice
-        document.getElementById('requestNewCode').addEventListener('click', async function() {
-            const phone = document.getElementById('phone_number').value.trim();
-            const password = document.getElementById('password').value.trim();
-            
-            if (!phone || !password) {
-                showMessage('Inserisci numero di telefono e password', 'error');
-                return;
-            }
-            
-            showLoading();
-            
-            const result = await makeRequest('/api/auth/login', {
-                method: 'POST',
-                body: JSON.stringify({ 
-                    phone_number: phone,
-                    password: password 
-                })
-            });
-            
-            hideLoading();
-            
-            if (result.success) {
-                // Salva dati per la verifica
-                localStorage.setItem('temp_phone', phone);
-                showMessage(result.message, 'success');
-                
-                // Redirect a pagina verifica codice
-                setTimeout(() => {
-                    window.location.href = '/verify-code';
-                }, 2000);
-            } else {
-                showMessage(result.error || 'Errore nel login', 'error');
-            }
-        });
-        
-        // Richiedi nuovo codice (secondo bottone)
-        document.getElementById('requestNewCode2').addEventListener('click', async function() {
-            const phone = document.getElementById('phone_number').value.trim();
-            const password = document.getElementById('password').value.trim();
-            
-            if (!phone || !password) {
-                showMessage('Inserisci numero di telefono e password', 'error');
-                return;
-            }
-            
-            showLoading();
-            
-            const result = await makeRequest('/api/auth/login', {
-                method: 'POST',
-                body: JSON.stringify({ 
-                    phone_number: phone,
-                    password: password 
-                })
-            });
-            
-            hideLoading();
-            
-            if (result.success) {
-                // Salva dati per la verifica
-                localStorage.setItem('temp_phone', phone);
-                showMessage(result.message, 'success');
-                
-                // Redirect a pagina verifica codice
-                setTimeout(() => {
-                    window.location.href = '/verify-code';
-                }, 2000);
-            } else {
-                showMessage(result.error || 'Errore nel login', 'error');
-            }
-        });
-        
-        document.getElementById('loginForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const phone = document.getElementById('phone_number').value.trim();
-            const password = document.getElementById('password').value.trim();
-            
-            if (!phone || !password) {
-                showMessage('Inserisci numero di telefono e password', 'error');
-                return;
-            }
-            
-            // FIXED: Better UX with informative loading message
-            showLoading();
-            showMessage('🔄 Connessione a Telegram in corso... Il sistema effettuerà automaticamente dei tentativi per garantire una connessione stabile.', 'info');
-            
-            try {
-                const result = await makeRequest('/api/auth/login', {
-                    method: 'POST',
-                    body: JSON.stringify({ 
-                        phone_number: phone,
-                        password: password 
-                    })
-                });
-                
-                hideLoading();
-                
-                if (result.success) {
-                    // Salva user_id per la verifica
-                    localStorage.setItem('temp_user_id', result.user_id);
-                    localStorage.setItem('temp_phone', phone);
-                    
-                    showMessage(result.message, 'success');
-                    
-                    // Redirect a pagina verifica codice
-                    setTimeout(() => {
-                        window.location.href = '/verify-code';
-                    }, 2000);
-                } else {
-                    // Gestione speciale per FLOOD_WAIT
-                    if (result.error && result.error.includes('FLOOD_WAIT')) {
-                        // Estrai il tempo di attesa dal messaggio
-                        const waitMatch = result.error.match(/Attendi (\d+) secondi/);
-                        if (waitMatch) {
-                            const waitSeconds = parseInt(waitMatch[1]);
-                            const waitHours = Math.floor(waitSeconds / 3600);
-                            const waitMinutes = Math.floor((waitSeconds % 3600) / 60);
-                            
-                            let waitMessage = `🚫 <strong>Limite Telegram raggiunto!</strong><br><br>`;
-                            waitMessage += `Hai fatto troppe richieste di codici SMS in poco tempo.<br>`;
-                            waitMessage += `Telegram richiede di attendere: <strong>${waitHours} ore e ${waitMinutes} minuti</strong><br><br>`;
-                            waitMessage += `💡 <strong>Suggerimenti:</strong><br>`;
-                            waitMessage += `• Usa il sistema di cache per riutilizzare codici esistenti<br>`;
-                            waitMessage += `• Prova con un numero di telefono diverso<br>`;
-                            waitMessage += `• Aspetta che scada il limite temporaneo`;
-                            
-                            showMessage(waitMessage, 'error');
-                        } else {
-                            showMessage(result.error, 'error');
-                        }
-                    } else {
-                        showMessage(result.error || 'Errore durante il login', 'error');
-                    }
-                }
-            } catch (error) {
-                hideLoading();
-                console.error('Login error:', error);
-                showMessage('❌ Errore di connessione. Riprova tra qualche secondo.', 'error');
-            }
-        });
-    </script>
+    <script src="/static/js/login.js?v=202506180004"></script>
     """
     
     return render_template_string(
@@ -994,74 +783,24 @@ def verify_code():
             <button type="submit" class="btn success">✅ Verifica</button>
             <a href="/login" class="btn" style="background: #6c757d;">← Torna al login</a>
         </div>
+        
+        <div style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px; border: 1px solid #dee2e6;">
+            <h4>📱 Non hai ricevuto il codice?</h4>
+            <p style="margin-bottom: 15px; color: #6c757d; font-size: 0.9em;">
+                Se non hai ricevuto il codice Telegram, puoi richiederne uno nuovo.
+            </p>
+            
+            <button id="requestNewCodeBtn" class="btn" style="background: #6c757d; color: #fff; opacity: 0.5; cursor: not-allowed;" disabled>
+                🔄 Richiedi nuovo codice
+            </button>
+            
+            <div id="cooldownInfo" style="margin-top: 10px; font-size: 0.9em; color: #6c757d;">
+                ⏱️ Attendi <span id="cooldownTimer">10</span> secondi per richiedere un nuovo codice
+            </div>
+        </div>
     </form>
     
-    <script>
-        // Popola il numero di telefono dal localStorage
-        const savedPhone = localStorage.getItem('temp_phone');
-        if (savedPhone) {
-            document.getElementById('display_phone').value = savedPhone;
-        } else {
-            // Se non c'è numero salvato, torna al login
-            window.location.href = '/login';
-        }
-        
-        document.getElementById('verifyForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const code = document.getElementById('code').value.trim();
-            const password = document.getElementById('password').value.trim();
-            const phone_number = localStorage.getItem('temp_phone');
-            
-            if (!code || !phone_number) {
-                showMessage('Codice e numero di telefono richiesti', 'error');
-                return;
-            }
-            
-            showLoading();
-            
-            const result = await makeRequest('/api/auth/verify-code', {
-                method: 'POST',
-                body: JSON.stringify({ 
-                    phone_number: phone_number, 
-                    code: code,
-                    password: password || undefined
-                })
-            });
-            
-            hideLoading();
-            
-            if (result.success) {
-                // Salva session token
-                localStorage.setItem('session_token', result.session_token);
-                localStorage.removeItem('temp_user_id');
-                localStorage.removeItem('temp_phone');
-                
-                showMessage('Login completato! Reindirizzamento...', 'success');
-                
-                setTimeout(() => {
-                    window.location.href = '/dashboard';
-                }, 1000);
-            } else {
-                if (result.requires_2fa) {
-                    document.getElementById('passwordGroup').style.display = 'block';
-                    showMessage('Password 2FA richiesta', 'warning');
-                } else {
-                    showMessage(result.error || 'Codice non valido', 'error');
-                }
-            }
-        });
-        
-        // Auto-focus e auto-submit
-        document.getElementById('code').addEventListener('input', (e) => {
-            if (e.target.value.length === 5) {
-                // Auto submit quando il codice è completo
-                setTimeout(() => {
-                    document.getElementById('verifyForm').dispatchEvent(new Event('submit'));
-                }, 500);
-            }
-        });
-    </script>
+    <script src="/static/js/verify-code.js?v=202506180004"></script>
     """
     
     return render_template_string(
@@ -1476,7 +1215,6 @@ def profile():
     )
 
 @app.route('/chats')
-@require_auth
 def chats_list():
     """Pagina lista chat (protetta)"""
     
@@ -1498,15 +1236,6 @@ def chats_list():
     </div>
     
     <div id="chatsContainer" style="display: none;">
-        <div style="margin-bottom: 30px; padding: 20px; border: 1px solid #dee2e6; border-radius: 8px; background: #f8f9fa;">
-            <h3>🔍 Filtra chat</h3>
-            <div class="form-group">
-                <input type="text" id="searchFilter" placeholder="Cerca per nome, ID o username..." 
-                       style="width: 100%; padding: 10px; border: 1px solid #ced4da; border-radius: 4px;">
-                <small>Ricerca in tempo reale - prova "ROS" per trovare "Rossetto"</small>
-            </div>
-        </div>
-        
         <div id="chatsList"></div>
     </div>
     
@@ -1517,414 +1246,12 @@ def chats_list():
         </div>
     </div>
     
-    <script>
-        let allChats = [];
-        let filteredChats = [];
-        
-        // Carica le chat all'avvio
-        document.addEventListener('DOMContentLoaded', loadChats);
-        
-        async function loadChats() {{
-            showLoading();
-            
-            try {{
-                const result = await makeRequest('/api/telegram/get-chats', {{
-                    method: 'GET'
-                }});
-                
-                hideLoading();
-                
-                if (result.success) {{
-                    allChats = result.chats;
-                    filteredChats = [...allChats];
-                    
-                    // Salva le chat in sessionStorage per la navigazione
-                    sessionStorage.setItem('userChats', JSON.stringify(allChats));
-                    
-                    renderChats();
-                    
-                    document.getElementById('chatsContainer').style.display = 'block';
-                    
-                    // Setup filtro di ricerca
-                    document.getElementById('searchFilter').addEventListener('input', filterChats);
-                    
-                    // Update logging button states
-                    updateLoggingButtonStates();
-                    
-                }} else {{
-                    // Controlla se è un errore di autorizzazione persa
-                    if (result.error && result.error.includes('Authorization lost')) {{
-                        showReactivationPrompt();
-                    }} else {{
-                        showError(result.error || 'Errore durante il caricamento chat');
-                    }}
-                }}
-            }} catch (error) {{
-                hideLoading();
-                showError('Errore di connessione');
-            }}
-        }}
-        
-        function renderChats() {{
-            const container = document.getElementById('chatsList');
-            
-            if (filteredChats.length === 0) {{
-                container.innerHTML = `
-                    <div class="status warning">
-                        <p>🔍 Nessuna chat trovata con i criteri di ricerca</p>
-                    </div>
-                `;
-                return;
-            }}
-            
-            // Raggruppa le chat per stato di logging usando le sessioni attive
-            const chatsWithLogging = [];
-            const chatsWithoutLogging = [];
-            
-            filteredChats.forEach(chat => {{
-                // Controlla se la chat ha una sessione di logging attiva
-                if (window.activeSessions && window.activeSessions[chat.id]) {{
-                    chatsWithLogging.push(chat);
-                }} else {{
-                    chatsWithoutLogging.push(chat);
-                }}
-            }});
-            
-            container.innerHTML = `
-                <div style="margin-bottom: 20px;">
-                    <strong>📊 ${{filteredChats.length}} chat trovate (su ${{allChats.length}} totali)</strong>
-                    <div style="margin-top: 5px; font-size: 0.9em; color: #666;">
-                        📝 ${{chatsWithLogging.length}} con logging attivo | 💬 ${{chatsWithoutLogging.length}} senza logging
-                    </div>
-                </div>
-                
-                ${{chatsWithLogging.length > 0 ? `
-                    <div style="margin-bottom: 25px;">
-                        <h3 style="color: #28a745; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 2px solid #28a745;">
-                            📝 Chat con Logging Attivo (${{chatsWithLogging.length}})
-                        </h3>
-                ` : `
-                    <div style="margin-bottom: 25px; text-align: center; padding: 20px; background: #f8fff9; border: 1px solid #d4edda; border-radius: 8px;">
-                        <h3 style="color: #28a745; margin-bottom: 10px;">📝 Nessuna chat con logging attivo</h3>
-                        <p style="color: #6c757d; margin: 0;">Attiva il logging per una chat per vederla qui</p>
-                    </div>
-                `}}
-                        ${{chatsWithLogging.map(chat => `
-                            <div class="card" style="margin-bottom: 15px; border-left: 4px solid #28a745; background: linear-gradient(135deg, #f8fff9 0%, #ffffff 100%);">
-                                <div style="display: flex; justify-content: between; align-items: start;">
-                                    <div style="flex: 1;">
-                                        <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                                            <h3 style="margin: 0; margin-right: 10px;">${{escapeHtml(chat.title)}} ${{getChatIcon(chat.type)}}</h3>
-                                            <span class="badge badge-success" style="background: #28a745; color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.8em;">
-                                                📝 Logging Attivo
-                                            </span>
-                                        </div>
-                                        <p><strong>ID:</strong> 
-                                            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${{chat.id}}</code>
-                                            <button onclick="copyToClipboard('${{chat.id}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
-                                        </p>
-                                        <p><strong>Tipo:</strong> ${{getChatTypeLabel(chat.type)}}</p>
-                                        ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}} 
-                                            <button onclick="copyToClipboard('@${{chat.username}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
-                                        </p>` : ''}}
-                                        ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
-                                        ${{chat.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(chat.description.substring(0, 100))}}${{chat.description.length > 100 ? '...' : ''}}</p>` : ''}}
-                                        ${{chat.unread_count ? `<p><strong>Non letti:</strong> ${{chat.unread_count}} messaggi</p>` : ''}}
-                                        ${{chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(chat.last_message_date).toLocaleDateString('it-IT')}}</p>` : ''}}
-                                        
-                                        <div style="margin-top: 15px;">
-                                            <button onclick="toggleLogging(${{chat.id}}, '${{escapeHtml(chat.title)}}', '${{chat.username || ''}}', '${{chat.type}}')" class="btn btn-danger" id="loggingBtn_${{chat.id}}">
-                                                ⏹️ Ferma Logging
-                                            </button>
-                                            <button onclick="viewLogs(${{chat.id}})" class="btn btn-info" style="margin-left: 10px;" id="viewLogsBtn_${{chat.id}}">
-                                                📋 Vedi Log
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        `).join('')}}
-                    </div>
-                ` : ''}}
-                
-                ${{chatsWithoutLogging.length > 0 ? `
-                    <div>
-                        <h3 style="color: #6c757d; margin-bottom: 15px; padding-bottom: 8px; border-bottom: 2px solid #6c757d;">
-                            💬 Chat senza Logging (${{chatsWithoutLogging.length}})
-                        </h3>
-                ` : `
-                    <div style="text-align: center; padding: 20px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px;">
-                        <h3 style="color: #6c757d; margin-bottom: 10px;">💬 Tutte le chat hanno logging attivo</h3>
-                        <p style="color: #6c757d; margin: 0;">Ottimo lavoro! Tutte le chat sono sotto logging</p>
-                    </div>
-                `}}
-                
-                ${{chatsWithLogging.length === 0 && chatsWithoutLogging.length === 0 ? `
-                    <div style="text-align: center; padding: 40px; color: #6c757d;">
-                        <h3>📝 Nessuna chat trovata</h3>
-                        <p>Prova a modificare i criteri di ricerca</p>
-                    </div>
-                ` : ''}}
-                        ${{chatsWithoutLogging.map(chat => `
-                            <div class="card" style="margin-bottom: 15px; border-left: 4px solid #6c757d; background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);">
-                                <div style="display: flex; justify-content: between; align-items: start;">
-                                    <div style="flex: 1;">
-                                        <div style="display: flex; align-items: center; margin-bottom: 10px;">
-                                            <h3 style="margin: 0; margin-right: 10px;">${{escapeHtml(chat.title)}} ${{getChatIcon(chat.type)}}</h3>
-                                            <span class="badge badge-secondary" style="background: #6c757d; color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.8em;">
-                                                💬 Nessun Logging
-                                            </span>
-                                        </div>
-                                        <p><strong>ID:</strong> 
-                                            <code style="background: #e9ecef; padding: 2px 6px; border-radius: 3px; user-select: all;">${{chat.id}}</code>
-                                            <button onclick="copyToClipboard('${{chat.id}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia ID</button>
-                                        </p>
-                                        <p><strong>Tipo:</strong> ${{getChatTypeLabel(chat.type)}}</p>
-                                        ${{chat.username ? `<p><strong>Username:</strong> @${{chat.username}} 
-                                            <button onclick="copyToClipboard('@${{chat.username}}')" class="btn" style="margin-left: 10px; padding: 5px 10px; font-size: 12px;">📋 Copia @</button>
-                                        </p>` : ''}}
-                                        ${{chat.members_count ? `<p><strong>Membri:</strong> ${{chat.members_count}}</p>` : ''}}
-                                        ${{chat.description ? `<p><strong>Descrizione:</strong> ${{escapeHtml(chat.description.substring(0, 100))}}${{chat.description.length > 100 ? '...' : ''}}</p>` : ''}}
-                                        ${{chat.unread_count ? `<p><strong>Non letti:</strong> ${{chat.unread_count}} messaggi</p>` : ''}}
-                                        ${{chat.last_message_date ? `<p><strong>Ultimo messaggio:</strong> ${{new Date(chat.last_message_date).toLocaleDateString('it-IT')}}</p>` : ''}}
-                                        
-                                        <div style="margin-top: 15px;">
-                                            <button onclick="toggleLogging(${{chat.id}}, '${{escapeHtml(chat.title)}}', '${{chat.username || ''}}', '${{chat.type}}')" class="btn btn-primary" id="loggingBtn_${{chat.id}}">
-                                                📝 Metti sotto log
-                                            </button>
-                                            <button onclick="viewLogs(${{chat.id}})" class="btn btn-info" style="margin-left: 10px;" id="viewLogsBtn_${{chat.id}}">
-                                                📋 Vedi Log
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        `).join('')}}
-                    </div>
-                ` : ''}}
-            `;
-        }}
-        
-        function filterChats() {{
-            const query = document.getElementById('searchFilter').value.toLowerCase().trim();
-            
-            if (!query) {{
-                filteredChats = [...allChats];
-            }} else {{
-                filteredChats = allChats.filter(chat => 
-                    chat.title.toLowerCase().includes(query) ||
-                    chat.id.toString().includes(query) ||
-                    (chat.username && chat.username.toLowerCase().includes(query)) ||
-                    (chat.description && chat.description.toLowerCase().includes(query))
-                );
-            }}
-            
-            renderChats();
-        }}
-        
-        function copyToClipboard(text) {{
-            navigator.clipboard.writeText(text).then(() => {{
-                showMessage(`Copiato: ${{text}}`, 'success');
-            }}).catch(() => {{
-                // Fallback per browser più vecchi
-                const textarea = document.createElement('textarea');
-                textarea.value = text;
-                document.body.appendChild(textarea);
-                textarea.select();
-                document.execCommand('copy');
-                document.body.removeChild(textarea);
-                showMessage(`Copiato: ${{text}}`, 'success');
-            }});
-        }}
-        
-        function getChatIcon(type) {{
-            switch(type) {{
-                case 'private': return '👤';
-                case 'user': return '👤';
-                case 'bot': return '🤖';
-                case 'group': return '👥';
-                case 'supergroup': return '👥';
-                case 'channel': return '📢';
-                default: return '💬';
-            }}
-        }}
-        
-        function getChatTypeLabel(type) {{
-            switch(type) {{
-                case 'private': return 'Chat privata';
-                case 'user': return 'Persona';
-                case 'bot': return 'Bot';
-                case 'group': return 'Gruppo';
-                case 'supergroup': return 'Supergruppo';
-                case 'channel': return 'Canale';
-                default: return type;
-            }}
-        }}
-        
-        function escapeHtml(text) {{
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }}
-        
-        function showError(message) {{
-            document.getElementById('errorMessage').textContent = message;
-            document.getElementById('errorContainer').style.display = 'block';
-            document.getElementById('chatsContainer').style.display = 'none';
-        }}
-        
-        function showReactivationPrompt() {{
-            document.getElementById('errorContainer').style.display = 'block';
-            document.getElementById('errorMessage').innerHTML = `
-                <div style="text-align: center; padding: 20px;">
-                    <h3>🔐 Sessione Telegram scaduta</h3>
-                    <p>La tua sessione Telegram è scaduta. Devi riattivarla per continuare.</p>
-                    <br>
-                    <a href="/dashboard" class="btn btn-primary">🔄 Riattiva Sessione</a>
-                </div>
-            `;
-        }}
-        
-        async function toggleLogging(chatId, chatTitle, chatUsername, chatType) {{
-            const button = document.getElementById(`loggingBtn_${{chatId}}`);
-            const originalText = button.innerHTML;
-            
-            try {{
-                // Check if chat has active session using stored data
-                const hasActiveSession = window.activeSessions && window.activeSessions[chatId];
-                
-                if (hasActiveSession) {{
-                    // Stop logging
-                    if (confirm(`Sei sicuro di voler fermare il logging per "${{chatTitle}}"?`)) {{
-                        button.innerHTML = '⏹️ Fermando...';
-                        button.disabled = true;
-                        
-                        const sessionId = window.activeSessions[chatId].id;
-                        const stopResult = await makeRequest(`/api/logging/sessions/${{sessionId}}/stop`, {{
-                            method: 'POST'
-                        }});
-                        
-                        if (stopResult.success) {{
-                            button.innerHTML = '📝 Metti sotto log';
-                            button.className = 'btn btn-primary';
-                            delete button.dataset.sessionId;
-                            
-                            // Remove from active sessions
-                            delete window.activeSessions[chatId];
-                            
-                            showMessage('Logging fermato con successo', 'success');
-                            
-                            // Rerender per aggiornare il raggruppamento
-                            renderChats();
-                        }} else {{
-                            button.innerHTML = originalText;
-                            showMessage(stopResult.error || 'Errore nel fermare il logging', 'error');
-                        }}
-                    }}
-                }} else {{
-                    // Start logging
-                    if (confirm(`Sei sicuro di voler iniziare il logging per "${{chatTitle}}"?`)) {{
-                        button.innerHTML = '🔄 Avviando...';
-                        button.disabled = true;
-                        
-                        const startResult = await makeRequest('/api/logging/sessions', {{
-                            method: 'POST',
-                            body: JSON.stringify({{
-                                chat_id: chatId,
-                                chat_title: chatTitle,
-                                chat_username: chatUsername,
-                                chat_type: chatType
-                            }})
-                        }});
-                        
-                        if (startResult.success) {{
-                            button.innerHTML = '⏹️ Ferma Logging';
-                            button.className = 'btn btn-danger';
-                            button.dataset.sessionId = startResult.session_id;
-                            
-                            // Add to active sessions
-                            if (!window.activeSessions) window.activeSessions = {{}};
-                            window.activeSessions[chatId] = {{
-                                id: startResult.session_id,
-                                chat_id: chatId,
-                                chat_title: chatTitle,
-                                is_active: true
-                            }};
-                            
-                            showMessage('Logging avviato con successo', 'success');
-                            
-                            // Rerender per aggiornare il raggruppamento
-                            renderChats();
-                        }} else {{
-                            button.innerHTML = originalText;
-                            showMessage(startResult.error || 'Errore nell\'avviare il logging', 'error');
-                        }}
-                    }}
-                }}
-            }} catch (error) {{
-                button.innerHTML = originalText;
-                button.disabled = false;
-                showMessage('Errore di connessione', 'error');
-            }}
-            
-            button.disabled = false;
-        }}
-        
-        // Update button states on page load
-        async function updateLoggingButtonStates() {{
-            // Get all logging sessions for the user
-            let activeSessions = {{}};
-            try {{
-                const sessionsResult = await makeRequest('/api/logging/sessions', {{
-                    method: 'GET'
-                }});
-                
-                if (sessionsResult.success && sessionsResult.sessions) {{
-                    sessionsResult.sessions.forEach(session => {{
-                        if (session.is_active) {{
-                            activeSessions[session.chat_id] = session;
-                        }}
-                    }});
-                }}
-            }} catch (error) {{
-                console.error('Error loading logging sessions:', error);
-            }}
-            
-            // Update button states based on active sessions
-            for (const chat of allChats) {{
-                const button = document.getElementById(`loggingBtn_${{chat.id}}`);
-                if (button && activeSessions[chat.id]) {{
-                    button.innerHTML = '⏹️ Ferma Logging';
-                    button.className = 'btn btn-danger';
-                    
-                    // Store session info for easy access
-                    button.dataset.sessionId = activeSessions[chat.id].id;
-                }}
-            }}
-            
-            // Store active sessions globally for use in grouping
-            window.activeSessions = activeSessions;
-            
-            // Rerender chats to apply grouping after button states are updated
-            renderChats();
-        }}
-        
-        async function viewLogs(chatId) {{
-            try {{
-                // Check if chat has active session using stored data
-                const activeSession = window.activeSessions && window.activeSessions[chatId];
-                
-                if (activeSession && activeSession.id) {{
-                    // Redirect to logs page
-                    window.location.href = `/message-logs/${{activeSession.id}}`;
-                }} else {{
-                    showMessage('Nessuna sessione di logging attiva per questa chat', 'warning');
-                }}
-            }} catch (error) {{
-                showMessage('Errore nel visualizzare i log', 'error');
-            }}
-        }}
-    </script>
+    <div id="debugContainer" style="margin-top: 20px; padding: 20px; background: #f0f0f0; border-radius: 8px;">
+        <h3>🐛 Debug Info</h3>
+        <div id="debugInfo"></div>
+    </div>
+    
+    <script src="/static/js/chats.js"></script>
     """
     
     return render_template_string(
@@ -2943,8 +2270,12 @@ def api_verify_code():
         session['session_token'] = result['access_token']
         session['user_id'] = result['user']['id']
         
-        # Aggiungi session_token per il JavaScript
+        # Aggiungi session_token per il JavaScript (localStorage)
         result['session_token'] = result['access_token']
+        
+        # Log per debug
+        logger.info(f"🔐 [VERIFY-CODE] Token salvato in sessione Flask: {result['access_token'][:50]}...")
+        logger.info(f"🔐 [VERIFY-CODE] User ID salvato: {result['user']['id']}")
     
     return jsonify(result or {'error': 'Backend non disponibile'})
 
@@ -2978,11 +2309,32 @@ def api_logout():
 @app.route('/api/telegram/get-chats', methods=['GET'])
 def api_get_chats():
     """Proxy per recupero chat backend"""
-    if not is_authenticated():
-        return jsonify({'error': 'Autenticazione richiesta'}), 401
+    logger.info(f"🔍 [API] GET /api/telegram/get-chats - Request received")
     
-    result = call_backend('/api/user/chats', 'GET', auth_token=session['session_token'])
-    return jsonify(result or {'error': 'Backend non disponibile'})
+    # Controlla autenticazione sia da sessione Flask che da header Authorization
+    auth_token = None
+    
+    # Prima prova dalla sessione Flask
+    if is_authenticated():
+        auth_token = session['session_token']
+        logger.info(f"🔍 [API] Using Flask session token")
+    else:
+        # Se non c'è sessione Flask, prova dall'header Authorization
+        auth_header = request.headers.get('Authorization')
+        if auth_header and auth_header.startswith('Bearer '):
+            auth_token = auth_header[7:]  # Rimuovi "Bearer "
+            logger.info(f"🔍 [API] Using Authorization header token")
+        else:
+            logger.warning(f"🔍 [API] GET /api/telegram/get-chats - No authentication found")
+            return jsonify({'error': 'Autenticazione richiesta'}), 401
+    
+    logger.info(f"🔍 [API] Calling backend: /api/user/chats")
+    result = call_backend('/api/user/chats', 'GET', auth_token=auth_token)
+    logger.info(f"🔍 [API] Backend response: {result}")
+    
+    final_result = result or {'error': 'Backend non disponibile'}
+    logger.info(f"🔍 [API] Final response: {final_result}")
+    return jsonify(final_result)
 
 @app.route('/api/telegram/find-chat', methods=['POST'])
 def api_find_chat():
@@ -5048,6 +4400,53 @@ def proxy_get_chat_logging_status(chat_id):
         return jsonify(response), 200
     else:
         return jsonify({"success": False, "error": "Backend call failed"}), 500
+
+@app.route('/api/debug/session', methods=['GET'])
+def debug_session():
+    """Debug endpoint per controllare lo stato della sessione"""
+    return jsonify({
+        'is_authenticated': is_authenticated(),
+        'session_token_present': 'session_token' in session,
+        'session_token_value': session.get('session_token', 'NOT_FOUND')[:50] + '...' if session.get('session_token') else None,
+        'user_id_present': 'user_id' in session,
+        'user_id_value': session.get('user_id'),
+        'all_session_keys': list(session.keys())
+    })
+
+@app.route('/api/debug/log', methods=['POST'])
+def debug_log():
+    """Endpoint per ricevere log dal browser"""
+    try:
+        data = request.get_json()
+        level = data.get('level', 'info')
+        message = data.get('message', '')
+        timestamp = data.get('timestamp', '')
+        url = data.get('url', '')
+        
+        # Log con formato colorato
+        if level == 'error':
+            logger.error(f"🌐 [BROWSER-{level.upper()}] {message} | URL: {url} | Time: {timestamp}")
+        elif level == 'warn':
+            logger.warning(f"🌐 [BROWSER-{level.upper()}] {message} | URL: {url} | Time: {timestamp}")
+        else:
+            logger.info(f"🌐 [BROWSER-{level.upper()}] {message} | URL: {url} | Time: {timestamp}")
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Errore nel debug_log: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/auth/sync-session', methods=['GET'])
+def sync_session():
+    """Sincronizza localStorage con sessione Flask"""
+    if is_authenticated():
+        return jsonify({
+            'success': True,
+            'session_token': session['session_token'],
+            'user_id': session['user_id']
+        })
+    else:
+        return jsonify({'error': 'Sessione non valida'}), 401
 
 if __name__ == '__main__':
     logger.info("🌐 Starting Telegram Chat Manager Frontend")

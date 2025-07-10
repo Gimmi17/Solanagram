@@ -185,9 +185,30 @@
             createToast(message, type);
         }
 
-        // Enhanced API request helper with better error handling
-        async function makeRequest(url, options = {}) {
-            const token = localStorage.getItem('session_token') || localStorage.getItem('access_token');
+        // Enhanced API request helper with better error handling and custom timeout
+        async function makeRequest(url, options = {}, customTimeout = 30000) {
+            let token = localStorage.getItem('session_token') || localStorage.getItem('access_token');
+            
+            // Se non c'è token in localStorage, prova a sincronizzare con la sessione Flask
+            if (!token) {
+                try {
+                    const syncResult = await fetch('/api/auth/sync-session', {
+                        method: 'GET',
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                    
+                    if (syncResult.ok) {
+                        const syncData = await syncResult.json();
+                        if (syncData.success && syncData.session_token) {
+                            localStorage.setItem('session_token', syncData.session_token);
+                            token = syncData.session_token;
+                        }
+                    }
+                } catch (error) {
+                    console.log('Errore sincronizzazione sessione:', error);
+                }
+            }
+            
             const headers = {
                 'Content-Type': 'application/json',
                 ...options.headers
@@ -207,12 +228,18 @@
                 }, 200);
             }
             
+            // Create AbortController for custom timeout
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), customTimeout);
+            
             try {
                 const response = await fetch(url, {
                     ...options,
-                    headers
+                    headers,
+                    signal: controller.signal
                 });
                 
+                clearTimeout(timeoutId);
                 clearTimeout(loadingTimeout);
                 if (showLoading) {
                     document.getElementById('loading-overlay').style.display = 'none';
@@ -245,9 +272,18 @@
                 
                 return data;
             } catch (error) {
+                clearTimeout(timeoutId);
                 clearTimeout(loadingTimeout);
                 if (showLoading) {
                     document.getElementById('loading-overlay').style.display = 'none';
+                }
+                
+                // Check if it's a timeout error
+                if (error.name === 'AbortError') {
+                    console.error('Request timeout after', customTimeout, 'ms');
+                    const timeoutError = new Error(`Request timeout after ${customTimeout}ms`);
+                    timeoutError.name = 'TimeoutError';
+                    throw timeoutError;
                 }
                 
                 console.error('Request error:', error);
