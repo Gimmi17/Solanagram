@@ -149,6 +149,48 @@ redis-cli: ## Open Redis CLI
 	@echo "💾 Opening Redis CLI..."
 	@docker-compose exec redis redis-cli
 
+##@ N8N Integration
+
+start-n8n: ## Start N8N automation platform
+	@echo "Starting N8N integration..."
+	@./scripts/start-n8n.sh
+
+stop-n8n: ## Stop N8N platform
+	@echo "Stopping N8N..."
+	@docker-compose -f docker-compose.n8n.yml down
+	@echo "N8N stopped"
+
+logs-n8n: ## Show N8N logs
+	@echo "Showing N8N logs..."
+	@docker-compose -f docker-compose.n8n.yml logs -f solanagram-n8n
+
+n8n-shell: ## Open N8N container shell
+	@echo "Opening N8N shell..."
+	@docker exec -it solanagram-n8n /bin/sh
+
+n8n-status: ## Check N8N status and endpoints
+	@echo "N8N Status:"
+	@echo "=============="
+	@docker ps --filter name=solanagram-n8n --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+	@echo ""
+	@echo "Health Check:"
+	@curl -s http://localhost:5679/healthz || echo "N8N not responding"
+	@echo ""
+	@echo "Available Endpoints:"
+	@echo "  Dashboard: http://localhost:5679"
+	@echo "  Webhook Base: http://localhost:5679/webhook/"
+	@echo "  Health: http://localhost:5679/healthz"
+
+n8n-reset: ## Reset N8N (clean restart)
+	@echo "Resetting N8N..."
+	@docker-compose -f docker-compose.n8n.yml down -v
+	@docker volume rm solanagram-n8n-data || true
+	@./scripts/start-n8n.sh
+
+test-n8n-webhook: ## Test N8N webhook connectivity
+	@echo "Testing N8N webhook connectivity..."
+	@curl -X POST http://localhost:5679/webhook/test -H "Content-Type: application/json" -d '{"test": "connectivity"}' || echo "Webhook test failed"
+
 ##@ Cleanup
 
 stop: ## Stop all services

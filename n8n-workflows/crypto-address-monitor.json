@@ -1,0 +1,266 @@
+{
+  "name": "Solanagram Crypto Address Monitor",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "cron-trigger",
+      "name": "Monitor Timer",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "connection": {
+          "host": "solanagram-db",
+          "port": 5432,
+          "database": "solanagram_db",
+          "user": "solanagram_user",
+          "password": "solanagram_password",
+          "ssl": false
+        },
+        "query": "SELECT \n  eev.id,\n  eev.extracted_value as crypto_address,\n  eev.extracted_at,\n  sm.message_text,\n  sm.sender_name,\n  ml.source_chat_title,\n  me.rule_name\nFROM elaboration_extracted_values eev\nJOIN message_elaborations me ON eev.elaboration_id = me.id\nJOIN saved_messages sm ON eev.message_id = sm.id  \nJOIN message_listeners ml ON sm.listener_id = ml.id\nWHERE eev.extracted_at > NOW() - INTERVAL '1 minute'\nAND me.rule_name LIKE '%crypto%'\nORDER BY eev.extracted_at DESC;"
+      },
+      "id": "postgres-query",
+      "name": "Get New Crypto Addresses",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition1",
+              "leftValue": "={{ $json.crypto_address.length }}",
+              "rightValue": 26,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-valid-addresses",
+      "name": "Filter Valid Addresses",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        680,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.blockchain.info/haskoin-store/btc/address/{{ $json.crypto_address }}/balance",
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "blockchain-api",
+      "name": "Verify Bitcoin Address",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        900,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition1", 
+              "leftValue": "={{ $('Verify Bitcoin Address').first().json.confirmed }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "filter-active-addresses",
+      "name": "Filter Active Addresses",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "sendMessage",
+        "chatId": "YOUR_TELEGRAM_CHAT_ID",
+        "text": "🚨 **Crypto Address Alert**\n\n**Address**: `{{ $('Get New Crypto Addresses').first().json.crypto_address }}`\n**Balance**: {{ $('Verify Bitcoin Address').first().json.confirmed / 100000000 }} BTC\n**Source Chat**: {{ $('Get New Crypto Addresses').first().json.source_chat_title }}\n**Sender**: {{ $('Get New Crypto Addresses').first().json.sender_name }}\n**Message**: {{ $('Get New Crypto Addresses').first().json.message_text.substring(0, 100) }}...\n**Time**: {{ $('Get New Crypto Addresses').first().json.extracted_at }}\n\n[View on Blockchain](https://blockchain.info/address/{{ $('Get New Crypto Addresses').first().json.crypto_address }})",
+        "additionalFields": {
+          "parseMode": "Markdown"
+        }
+      },
+      "id": "telegram-alert",
+      "name": "Send Telegram Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        300
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-bot-credentials",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "connection": {
+          "host": "solanagram-db",
+          "port": 5432,
+          "database": "solanagram_db",
+          "user": "solanagram_user",
+          "password": "solanagram_password",
+          "ssl": false
+        },
+        "query": "INSERT INTO crypto_alerts (address, balance, source_chat, sender_name, detected_at, alert_sent)\nVALUES (\n  '{{ $('Get New Crypto Addresses').first().json.crypto_address }}',\n  {{ $('Verify Bitcoin Address').first().json.confirmed }},\n  '{{ $('Get New Crypto Addresses').first().json.source_chat_title }}',\n  '{{ $('Get New Crypto Addresses').first().json.sender_name }}',\n  NOW(),\n  true\n);"
+      },
+      "id": "log-alert",
+      "name": "Log Alert to Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        1560,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Monitor Timer": {
+      "main": [
+        [
+          {
+            "node": "Get New Crypto Addresses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get New Crypto Addresses": {
+      "main": [
+        [
+          {
+            "node": "Filter Valid Addresses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Valid Addresses": {
+      "main": [
+        [
+          {
+            "node": "Verify Bitcoin Address",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Bitcoin Address": {
+      "main": [
+        [
+          {
+            "node": "Filter Active Addresses",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Active Addresses": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Telegram Alert": {
+      "main": [
+        [
+          {
+            "node": "Log Alert to Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2024-01-15T10:00:00.000Z",
+      "updatedAt": "2024-01-15T10:00:00.000Z",
+      "id": "crypto",
+      "name": "crypto"
+    },
+    {
+      "createdAt": "2024-01-15T10:00:00.000Z",
+      "updatedAt": "2024-01-15T10:00:00.000Z",
+      "id": "solanagram",
+      "name": "solanagram"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2024-01-15T10:00:00.000Z",
+  "versionId": "1"
+} 

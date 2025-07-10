@@ -1,0 +1,103 @@
+name: solanagram-n8n
+version: '3.8'
+
+# ------------------------------------------------------------------------------
+# N8N Integration per Solanagram
+# ------------------------------------------------------------------------------
+# Questo file aggiunge N8N al sistema Solanagram per automazioni avanzate.
+# N8N può leggere e processare i messaggi dal database PostgreSQL.
+#
+# Per avviare insieme a Solanagram:
+# 1. docker-compose up -d  (avvia Solanagram)
+# 2. docker-compose -f docker-compose.n8n.yml up -d  (avvia N8N)
+#
+# N8N sarà disponibile su: http://localhost:5678
+# Database credentials sono già configurate per accesso a solanagram_db
+# ------------------------------------------------------------------------------
+
+services:
+  # 🤖 N8N Workflow Automation
+  solanagram-n8n:
+    image: n8nio/n8n:latest
+    container_name: solanagram-n8n
+    restart: unless-stopped
+    environment:
+      # Database per N8N (usa il database Solanagram per i workflow)
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=solanagram-db
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=solanagram_db
+      - DB_POSTGRESDB_USER=solanagram_user
+      - DB_POSTGRESDB_PASSWORD=solanagram_password
+      - DB_POSTGRESDB_SCHEMA=n8n
+      
+      # N8N Configuration
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=solanagram123
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5679
+      
+      # Security
+      - N8N_SECURE_COOKIE=false
+      - N8N_ENCRYPTION_KEY=solanagram-n8n-encryption-key-change-me
+      
+      # Performance
+      - N8N_SKIP_WEBHOOK_DEREGISTRATION_STARTUP=true
+      - EXECUTIONS_TIMEOUT=300
+      - EXECUTIONS_TIMEOUT_MAX=600
+      
+      # Locale
+      - TZ=Europe/Rome
+      
+    ports:
+      - "5679:5678"
+    volumes:
+      # Persistent data for N8N workflows
+      - solanagram_n8n_data:/home/node/.n8n
+      # Access to local files (optional)
+      - ./n8n-workflows:/home/node/.n8n/workflows:rw
+      - ./n8n-nodes:/home/node/.n8n/nodes:rw
+    
+    networks:
+      - solanagram-net
+    
+    # Connect to existing Solanagram network
+    external_links:
+      - solanagram-db:solanagram-db
+      - solanagram-backend:solanagram-backend
+      - solanagram-cache:solanagram-cache
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 📊 N8N Database Viewer (optional)
+  solanagram-n8n-adminer:
+    image: adminer:4-standalone
+    container_name: solanagram-n8n-adminer
+    restart: unless-stopped
+    ports:
+      - "8083:8080"
+    networks:
+      - solanagram-net
+    environment:
+      ADMINER_DEFAULT_SERVER: solanagram-db
+      ADMINER_DESIGN: pepa-linha
+    profiles:
+      - adminer
+
+# Use existing Solanagram network
+networks:
+  solanagram-net:
+    external: true
+    name: solanagram-net
+
+volumes:
+  solanagram_n8n_data:
+    name: solanagram-n8n-data 
