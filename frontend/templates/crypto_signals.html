@@ -4,7 +4,7 @@
 
 {% block head %}
 <style>
-    /* Crypto Signals Specific Styles */
+    /* Crypto Signals Wireframe Styles */
     .crypto-container {
         max-width: 1400px;
         margin: 0 auto;
@@ -17,25 +17,24 @@
     }
     
     .page-header h1 {
-        background: linear-gradient(135deg, var(--primary-600), var(--primary-700));
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
+        color: var(--primary-900);
         font-size: var(--text-4xl);
         font-weight: 700;
         margin-bottom: var(--space-4);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
     }
     
     .page-header p {
         font-size: var(--text-lg);
-        color: var(--secondary-600);
+        color: var(--primary-600);
         max-width: 600px;
         margin: 0 auto;
     }
     
     .section-card {
         background: white;
-        border: 1px solid var(--secondary-200);
+        border: 2px solid var(--primary-200);
         border-radius: var(--radius-2xl);
         padding: var(--space-8);
         margin-bottom: var(--space-8);
@@ -51,7 +50,7 @@
         left: 0;
         right: 0;
         height: 4px;
-        background: linear-gradient(90deg, var(--primary-500), var(--primary-600));
+        background: var(--primary-300);
     }
     
     .section-header {
@@ -64,7 +63,7 @@
     .section-icon {
         width: 48px;
         height: 48px;
-        background: linear-gradient(135deg, var(--primary-500), var(--primary-600));
+        background: var(--dynamic-600);
         border-radius: var(--radius-xl);
         display: flex;
         align-items: center;
@@ -72,23 +71,26 @@
         font-size: var(--text-2xl);
         color: white;
         box-shadow: var(--shadow-md);
+        border: 2px solid var(--dynamic-700);
     }
     
     .section-title {
         font-size: var(--text-2xl);
         font-weight: 600;
-        color: var(--secondary-900);
+        color: var(--primary-900);
         margin: 0;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
     }
     
     .section-description {
-        color: var(--secondary-600);
+        color: var(--primary-600);
         margin: 0;
     }
     
     .signal-card {
         background: white;
-        border: 1px solid var(--secondary-200);
+        border: 2px solid var(--primary-200);
         border-radius: var(--radius-xl);
         padding: var(--space-6);
         margin-bottom: var(--space-5);
@@ -143,18 +145,21 @@
     .token-details h3 {
         font-size: var(--text-xl);
         font-weight: 600;
-        color: var(--secondary-900);
+        color: var(--primary-900);
         margin-bottom: var(--space-2);
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
     }
     
     .token-address {
         font-size: var(--text-sm);
-        color: var(--secondary-500);
+        color: var(--primary-500);
         font-family: var(--font-family-mono);
-        background: var(--secondary-50);
+        background: var(--primary-50);
         padding: var(--space-1) var(--space-2);
         border-radius: var(--radius-sm);
         display: inline-block;
+        border: 1px solid var(--primary-200);
     }
     
     .signal-metrics {
@@ -165,22 +170,23 @@
     }
     
     .metric-box {
-        background: linear-gradient(135deg, var(--secondary-50), var(--primary-50));
+        background: var(--primary-50);
         padding: var(--space-4);
         border-radius: var(--radius-lg);
         text-align: center;
-        border: 1px solid var(--secondary-200);
+        border: 2px solid var(--primary-200);
         transition: all var(--transition-fast);
     }
     
     .metric-box:hover {
         transform: translateY(-1px);
         box-shadow: var(--shadow-sm);
+        border-color: var(--primary-300);
     }
     
     .metric-label {
         font-size: var(--text-xs);
-        color: var(--secondary-500);
+        color: var(--primary-500);
         margin-bottom: var(--space-1);
         text-transform: uppercase;
         font-weight: 600;
@@ -190,7 +196,7 @@
     .metric-value {
         font-size: var(--text-lg);
         font-weight: 600;
-        color: var(--secondary-900);
+        color: var(--primary-900);
     }
     
     .stats-grid {
@@ -202,7 +208,7 @@
     
     .stat-card {
         background: white;
-        border: 1px solid var(--secondary-200);
+        border: 2px solid var(--primary-200);
         border-radius: var(--radius-xl);
         padding: var(--space-6);
         text-align: center;
@@ -224,8 +230,9 @@
     }
     
     .stat-card:hover {
-        transform: translateY(-4px);
-        box-shadow: var(--shadow-xl);
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-lg);
+        border-color: var(--primary-300);
     }
     
     .stat-card:hover::before {
@@ -241,7 +248,7 @@
     }
     
     .stat-card.total-stat::before {
-        background: var(--primary-500);
+        background: var(--dynamic-600);
     }
     
     .stat-icon {
@@ -255,18 +262,22 @@
         color: white;
         margin: 0 auto var(--space-4);
         box-shadow: var(--shadow-md);
+        border: 2px solid;
     }
     
     .buy-stat .stat-icon {
-        background: linear-gradient(135deg, var(--success-500), var(--success-600));
+        background: var(--success-600);
+        border-color: var(--success-700);
     }
     
     .sell-stat .stat-icon {
-        background: linear-gradient(135deg, var(--danger-500), var(--danger-600));
+        background: var(--danger-600);
+        border-color: var(--danger-700);
     }
     
     .total-stat .stat-icon {
-        background: linear-gradient(135deg, var(--primary-500), var(--primary-600));
+        background: var(--dynamic-600);
+        border-color: var(--dynamic-700);
     }
     
     .stat-value {
@@ -277,12 +288,14 @@
     
     .buy-stat .stat-value { color: var(--success-600); }
     .sell-stat .stat-value { color: var(--danger-600); }
-    .total-stat .stat-value { color: var(--primary-600); }
+    .total-stat .stat-value { color: var(--dynamic-600); }
     
     .stat-label {
-        color: var(--secondary-600);
+        color: var(--primary-600);
         font-size: var(--text-sm);
         font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
     }
     
     .filter-controls {
@@ -312,8 +325,8 @@
     }
     
     .test-result {
-        background: var(--secondary-900);
-        color: var(--secondary-100);
+        background: var(--primary-50);
+        color: var(--primary-800);
         padding: var(--space-6);
         border-radius: var(--radius-lg);
         margin-top: var(--space-6);
@@ -321,13 +334,15 @@
         font-size: var(--text-sm);
         line-height: 1.6;
         overflow-x: auto;
-        border: 1px solid var(--secondary-700);
+        border: 2px solid var(--primary-200);
     }
     
     .test-result h4 {
-        color: var(--success-400);
+        color: var(--dynamic-600);
         margin-bottom: var(--space-4);
         font-family: var(--font-family-sans);
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
     }
     
     .processor-item {
@@ -335,22 +350,24 @@
         justify-content: space-between;
         align-items: center;
         padding: var(--space-4);
-        background: var(--secondary-50);
+        background: var(--primary-50);
         border-radius: var(--radius-lg);
         margin-bottom: var(--space-3);
-        border: 1px solid var(--secondary-200);
+        border: 2px solid var(--primary-200);
     }
     
     .processor-info h4 {
         font-size: var(--text-lg);
         font-weight: 600;
-        color: var(--secondary-900);
+        color: var(--primary-900);
         margin-bottom: var(--space-1);
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
     }
     
     .processor-info p {
         font-size: var(--text-sm);
-        color: var(--secondary-600);
+        color: var(--primary-600);
         margin: 0;
     }
     
@@ -362,7 +379,7 @@
     .empty-state {
         text-align: center;
         padding: var(--space-12);
-        color: var(--secondary-500);
+        color: var(--primary-500);
     }
     
     .empty-state-icon {
@@ -373,7 +390,7 @@
     
     /* Loading states */
     .skeleton {
-        background: linear-gradient(90deg, var(--secondary-200) 25%, var(--secondary-100) 50%, var(--secondary-200) 75%);
+        background: linear-gradient(90deg, var(--primary-200) 25%, var(--primary-100) 50%, var(--primary-200) 75%);
         background-size: 200% 100%;
         animation: loading 1.5s infinite;
         border-radius: var(--radius-md);

@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wireframe Design Demo - Solanagram</title>
+    <link rel="stylesheet" href="static/css/style.css">
+</head>
+<body>
+    <main class="main-content" role="main">
+        <div class="content-header">
+            <h1>Wireframe Design System</h1>
+            <p>Nuovo design wireframe con elementi dinamici marroni</p>
+        </div>
+        
+        <div class="content-body">
+            <div class="container">
+                <!-- Stats Grid -->
+                <div class="stats-grid">
+                    <div class="stat-card buy-stat">
+                        <div class="stat-icon">📈</div>
+                        <div class="stat-value">156</div>
+                        <div class="stat-label">Segnali Buy</div>
+                    </div>
+                    <div class="stat-card sell-stat">
+                        <div class="stat-icon">📉</div>
+                        <div class="stat-value">89</div>
+                        <div class="stat-label">Segnali Sell</div>
+                    </div>
+                    <div class="stat-card total-stat">
+                        <div class="stat-icon">📊</div>
+                        <div class="stat-value">245</div>
+                        <div class="stat-label">Totale Segnali</div>
+                    </div>
+                </div>
+
+                <!-- Cards Section -->
+                <div class="grid grid-cols-2 gap-6 mb-8">
+                    <div class="card">
+                        <h3>Configurazione Sistema</h3>
+                        <p>Gestisci le impostazioni del sistema di trading automatico e monitoraggio dei segnali.</p>
+                        <div class="mt-4">
+                            <button class="btn btn-primary">Configura</button>
+                            <button class="btn btn-secondary">Test</button>
+                        </div>
+                    </div>
+                    
+                    <div class="card">
+                        <h3>Analisi Performance</h3>
+                        <p>Visualizza statistiche dettagliate sui segnali e le performance del sistema.</p>
+                        <div class="mt-4">
+                            <button class="btn btn-outline-primary">Visualizza</button>
+                            <button class="btn btn-outline-secondary">Esporta</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Form Section -->
+                <div class="card">
+                    <h3>Test Configurazione</h3>
+                    <form>
+                        <div class="form-group">
+                            <label for="api-key">API Key</label>
+                            <input type="text" id="api-key" class="form-control" placeholder="Inserisci la tua API key">
+                        </div>
+                        <div class="form-group">
+                            <label for="threshold">Soglia di Sensibilità</label>
+                            <input type="number" id="threshold" class="form-control" placeholder="0.5">
+                        </div>
+                        <div class="form-group">
+                            <label for="description">Descrizione</label>
+                            <textarea id="description" class="form-control" placeholder="Descrizione della configurazione"></textarea>
+                        </div>
+                        <div class="flex gap-4">
+                            <button type="submit" class="btn btn-primary">Salva Configurazione</button>
+                            <button type="button" class="btn btn-outline-danger">Cancella</button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Messages Section -->
+                <div class="mt-8">
+                    <div class="message message-success">
+                        Configurazione salvata con successo!
+                    </div>
+                    <div class="message message-info">
+                        Sistema in fase di test. I risultati saranno disponibili tra pochi minuti.
+                    </div>
+                    <div class="message message-warning">
+                        Attenzione: alcuni parametri potrebbero richiedere ottimizzazione.
+                    </div>
+                </div>
+
+                <!-- Badges Section -->
+                <div class="mt-8">
+                    <h3>Stato Sistema</h3>
+                    <div class="flex gap-4 mt-4">
+                        <span class="badge badge-success">Attivo</span>
+                        <span class="badge badge-info">Monitoraggio</span>
+                        <span class="badge badge-warning">Test</span>
+                        <span class="badge badge-secondary">In Coda</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+</body>
+</html>
