@@ -1261,9 +1261,24 @@ def login():
             logger.info(f"Has API hash: {user.get('api_hash_encrypted') is not None}")
 
         if user and check_password_hash(user['password_hash'], password):
+            # Check if user has API credentials
             if not user.get('api_id') or not user.get('api_hash_encrypted'):
-                return jsonify({"success": False, "status": "error", "error": get_error_message('API_CREDENTIALS_NOT_SET')}), 400
+                logger.info(f"User {phone} missing API credentials - login allowed but Telegram features will be limited")
+                # Allow login without API credentials, but don't send Telegram code
+                access_token = create_access_token(identity=user['id'])
+                return jsonify({
+                    "success": True, 
+                    "status": "success", 
+                    "message": "Login effettuato con successo. Configura le credenziali API per usare le funzionalità Telegram.",
+                    "access_token": access_token,
+                    "user": {
+                        "id": user['id'],
+                        "phone": user['phone'],
+                    },
+                    "warning": "Credenziali API non configurate. Vai su Profilo per configurarle."
+                })
 
+            # User has API credentials, proceed with Telegram authentication
             api_id = user['api_id']
             api_hash = decrypt_api_hash(user['api_hash_encrypted'])
             
@@ -1359,6 +1374,64 @@ def change_password():
     except Exception as e:
         db.rollback()
         logger.error(f"Error changing password for user ID {current_user_id}: {e}")
+        return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
+
+@app.route('/api/auth/update-credentials', methods=['POST'])
+@jwt_required()
+def update_credentials():
+    """
+    Updates the user's Telegram API credentials
+    """
+    current_user_id = get_jwt_identity()
+    data = request.get_json()
+    api_id = data.get('api_id')
+    api_hash = data.get('api_hash')
+    
+    if not api_id or not api_hash:
+        return jsonify({"success": False, "error": "API ID e API Hash sono obbligatori"}), 400
+    
+    # Validate API ID
+    try:
+        api_id = int(api_id)
+        if api_id <= 0:
+            return jsonify({"success": False, "error": "API ID deve essere un numero positivo"}), 400
+    except ValueError:
+        return jsonify({"success": False, "error": "API ID deve essere un numero valido"}), 400
+    
+    # Validate API Hash
+    if len(api_hash) != 32:
+        return jsonify({"success": False, "error": "API Hash deve essere di 32 caratteri"}), 400
+    
+    db = get_db_connection()
+    if not db:
+        return jsonify({"success": False, "error": get_error_message('DB_CONNECTION_FAILED')}), 500
+    
+    try:
+        with db.cursor(cursor_factory=RealDictCursor) as cursor:
+            # Get current user data
+            cursor.execute("SELECT phone FROM users WHERE id = %s", (current_user_id,))
+            user = cursor.fetchone()
+            
+            if not user:
+                return jsonify({"success": False, "error": "Utente non trovato"}), 404
+            
+            # Encrypt API hash
+            encrypted_api_hash = encrypt_api_hash(api_hash)
+            
+            # Update credentials
+            cursor.execute("UPDATE users SET api_id = %s, api_hash_encrypted = %s, updated_at = NOW() WHERE id = %s", 
+                        (api_id, encrypted_api_hash, current_user_id))
+            db.commit()
+            
+            logger.info(f"Updated API credentials for user ID {current_user_id}")
+            return jsonify({
+                "success": True,
+                "message": "Credenziali API aggiornate con successo"
+            }), 200
+            
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error updating API credentials for user ID {current_user_id}: {e}")
         return jsonify({"success": False, "error": get_error_message('UNEXPECTED_ERROR', error=str(e))}), 500
 
 @app.route('/api/auth/verify-code', methods=['POST'])
@@ -1487,11 +1560,19 @@ def get_user_chats():
     db = get_db_connection()
     
     with db.cursor(cursor_factory=RealDictCursor) as cursor:
-        cursor.execute("SELECT phone FROM users WHERE id = %s", (current_user_id,))
+        cursor.execute("SELECT phone, api_id, api_hash_encrypted FROM users WHERE id = %s", (current_user_id,))
         user_record = cursor.fetchone()
     
     if not user_record:
         return jsonify({"status": "error", "message": "User not found"}), 404
+    
+    # Check if user has API credentials
+    if not user_record.get('api_id') or not user_record.get('api_hash_encrypted'):
+        return jsonify({
+            "success": False, 
+            "error": "Credenziali API non configurate. Vai su Profilo per configurarle.",
+            "error_code": "API_CREDENTIALS_NOT_SET"
+        }), 400
         
     phone = user_record['phone']
     logger.info(f"Fetching chats for user {phone} (ID: {current_user_id})")
@@ -4365,6 +4446,57 @@ def get_chat_logging_status(chat_id):
     except Exception as e:
         logger.error(f"Error getting chat logging status: {e}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+@app.route('/api/logging/start', methods=['POST'])
+@jwt_required()
+async def start_logging():
+    current_user = get_jwt_identity()
+    data = request.get_json()
+    
+    if not all(key in data for key in ['chat_id', 'chat_title', 'chat_username', 'chat_type']):
+        return jsonify({'success': False, 'error': 'Dati chat incompleti'}), 400
+    
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT * FROM users WHERE id = %s', (current_user,))
+    user = cur.fetchone()
+    cur.close()
+    
+    if not user:
+        return jsonify({'success': False, 'error': 'Utente non trovato'}), 404
+    
+    # Check if user has API credentials
+    if not user.get('api_id') or not user.get('api_hash_encrypted'):
+        return jsonify({
+            'success': False, 
+            'error': 'Credenziali API non configurate. Vai su Profilo per configurarle.',
+            'error_code': 'API_CREDENTIALS_NOT_SET'
+        }), 400
+    
+    api_hash = decrypt_api_hash(user['api_hash_encrypted'])
+    
+    client = await get_telethon_client(user['phone'], user['api_id'], api_hash)
+    if not client:
+        return jsonify({'success': False, 'error': 'Impossibile ottenere sessione Telegram'}), 500
+    
+    session_string = client.session.save()
+    
+    success, message, container_name = logging_manager.create_logging_container(
+        user['id'],
+        user['phone'],
+        user['api_id'],
+        api_hash,
+        session_string,
+        data['chat_id'],
+        data['chat_title'],
+        data['chat_username'],
+        data['chat_type']
+    )
+    
+    if success:
+        return jsonify({'success': True, 'container_name': container_name})
+    else:
+        return jsonify({'success': False, 'error': message}), 500
 
 if __name__ == '__main__':
     app = create_app()

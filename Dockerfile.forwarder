@@ -1,0 +1,45 @@
+# 🐳 Solanagram Forwarder - Dockerfile per Fly.io
+FROM python:3.11-slim
+
+# Metadati
+LABEL maintainer="Solanagram Forwarder"
+LABEL version="1.0.0"
+LABEL description="Telegram Forwarder per Solanagram"
+
+# Variabili ambiente
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Installa dipendenze sistema
+RUN apt-get update && apt-get install -y \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Crea utente non-root
+RUN groupadd -r appuser && useradd -r -g appuser appuser
+
+# Directory di lavoro
+WORKDIR /app
+
+# Copia requirements e installa dipendenze
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copia script forwarder
+COPY forwarder.py ./
+
+# Crea directory configs e sessions
+RUN mkdir -p /app/configs /app/sessions && \
+    chown -R appuser:appuser /app
+
+# Switch to non-root user
+USER appuser
+
+# Health check (opzionale per forwarder)
+HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
+    CMD ps aux | grep python | grep forwarder.py || exit 1
+
+# Comando di avvio
+CMD ["python", "forwarder.py"] 

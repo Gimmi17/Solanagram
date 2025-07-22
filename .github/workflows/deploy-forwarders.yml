@@ -1,0 +1,92 @@
+name: Deploy Forwarders to Fly.io
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'forwarder.py'
+      - 'Dockerfile.forwarder'
+      - 'configs/**'
+      - '.github/workflows/deploy-forwarders.yml'
+
+jobs:
+  deploy-forwarders:
+    name: Deploy Forwarder Containers
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        forwarder: [sol, bsc, base, test1]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      
+      - name: Create Fly.io app for ${{ matrix.forwarder }}
+        run: |
+          # Create app if it doesn't exist
+          flyctl apps create solanagram-fwd-${{ matrix.forwarder }} || true
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      
+      - name: Deploy ${{ matrix.forwarder }} forwarder
+        run: |
+          # Create temporary directory for this forwarder
+          mkdir -p /tmp/fwd-${{ matrix.forwarder }}
+          cd /tmp/fwd-${{ matrix.forwarder }}
+          
+          # Copy necessary files
+          cp $GITHUB_WORKSPACE/Dockerfile.forwarder ./Dockerfile
+          cp $GITHUB_WORKSPACE/forwarder.py ./
+          cp $GITHUB_WORKSPACE/requirements.txt ./
+          
+          # Copy config
+          mkdir -p configs
+          cp $GITHUB_WORKSPACE/configs/forwarder-${{ matrix.forwarder }}-config.json ./configs/config.json
+          
+          # Copy session if exists
+          if [ -f "$GITHUB_WORKSPACE/configs/forwarder-${{ matrix.forwarder }}-session.session" ]; then
+            cp $GITHUB_WORKSPACE/configs/forwarder-${{ matrix.forwarder }}-session.session ./configs/session.session
+          fi
+          
+          # Create fly.toml
+          cat > fly.toml << EOF
+app = "solanagram-fwd-${{ matrix.forwarder }}"
+kill_signal = "SIGINT"
+kill_timeout = 5
+processes = []
+
+[env]
+  CONFIG_FILE = "/app/configs/config.json"
+  TELEGRAM_PHONE = "${{ secrets.TELEGRAM_PHONE }}"
+  TELEGRAM_API_ID = "${{ secrets.TELEGRAM_API_ID }}"
+  TELEGRAM_API_HASH = "${{ secrets.TELEGRAM_API_HASH }}"
+  SESSION_FILE = "/app/configs/session.session"
+
+[experimental]
+  auto_rollback = true
+
+[[services]]
+  internal_port = 8080
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["http"]
+    port = 80
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = 443
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
+EOF
+          
+          # Deploy
+          flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }} 

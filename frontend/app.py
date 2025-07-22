@@ -30,7 +30,7 @@ app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 
 # 🔧 Configurazione
-BACKEND_URL = os.getenv('BACKEND_URL', 'http://backend:5000')
+BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:5002')  # Backend locale
 ENVIRONMENT = os.getenv('FLASK_ENV', 'development')
 DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
 
@@ -1215,6 +1215,7 @@ def profile():
     )
 
 @app.route('/chats')
+@require_auth
 def chats_list():
     """Pagina lista chat (protetta)"""
     
@@ -2311,26 +2312,60 @@ def api_get_chats():
     """Proxy per recupero chat backend"""
     logger.info(f"🔍 [API] GET /api/telegram/get-chats - Request received")
     
-    # Controlla autenticazione sia da sessione Flask che da header Authorization
+    # ✅ PRIORITÀ: Prima prova header Authorization (più affidabile)
     auth_token = None
+    auth_header = request.headers.get('Authorization')
     
-    # Prima prova dalla sessione Flask
-    if is_authenticated():
+    if auth_header and auth_header.startswith('Bearer '):
+        auth_token = auth_header[7:]  # Rimuovi "Bearer "
+        logger.info(f"🔍 [API] Using Authorization header token: {auth_token[:20]}...")
+        
+        # ✅ NUOVO: Auto-ripristino sessione Flask se persa
+        if not is_authenticated():
+            try:
+                logger.info(f"🔄 [API] Sessione Flask persa, ripristino automatico...")
+                # Verifica che il token sia valido chiamando il backend
+                test_result = call_backend('/api/auth/validate-session', 'GET', auth_token=auth_token)
+                
+                if test_result and test_result.get('success'):
+                    # Token valido, ripristina sessione Flask
+                    session['session_token'] = auth_token
+                    session['user_id'] = test_result.get('user_id', 'unknown')
+                    logger.info(f"✅ [API] Sessione Flask ripristinata automaticamente")
+                else:
+                    logger.warning(f"❌ [API] Token localStorage non valido: {test_result}")
+                    return jsonify({'error': 'Token non valido'}), 401
+            except Exception as e:
+                logger.error(f"❌ [API] Errore ripristino sessione: {e}")
+                return jsonify({'error': 'Errore ripristino sessione'}), 500
+        
+    elif is_authenticated():
         auth_token = session['session_token']
-        logger.info(f"🔍 [API] Using Flask session token")
+        logger.info(f"🔍 [API] Using Flask session token: {auth_token[:20]}...")
     else:
-        # Se non c'è sessione Flask, prova dall'header Authorization
-        auth_header = request.headers.get('Authorization')
-        if auth_header and auth_header.startswith('Bearer '):
-            auth_token = auth_header[7:]  # Rimuovi "Bearer "
-            logger.info(f"🔍 [API] Using Authorization header token")
-        else:
-            logger.warning(f"🔍 [API] GET /api/telegram/get-chats - No authentication found")
-            return jsonify({'error': 'Autenticazione richiesta'}), 401
+        logger.warning(f"🔍 [API] GET /api/telegram/get-chats - No authentication found")
+        return jsonify({'error': 'Autenticazione richiesta'}), 401
     
     logger.info(f"🔍 [API] Calling backend: /api/user/chats")
     result = call_backend('/api/user/chats', 'GET', auth_token=auth_token)
     logger.info(f"🔍 [API] Backend response: {result}")
+    
+    # ✅ NUOVO: Gestione intelligente della sessione Telegram scaduta
+    if result and not result.get('success'):
+        error_msg = result.get('error', '')
+        
+        # Rileva se è un problema di sessione Telegram (non JWT)
+        if 'Authorization lost' in error_msg or 'not authorized' in error_msg:
+            logger.warning(f"🔐 [API] Sessione Telegram scaduta, non JWT token")
+            
+            # Restituisci un errore specifico che il frontend può gestire
+            return jsonify({
+                'success': False,
+                'error': 'Sessione Telegram scaduta',
+                'error_code': 'TELEGRAM_SESSION_EXPIRED',
+                'message': 'La tua sessione Telegram è scaduta. Devi riautenticarti con Telegram.',
+                'action_required': 'telegram_reauth'
+            })
     
     final_result = result or {'error': 'Backend non disponibile'}
     logger.info(f"🔍 [API] Final response: {final_result}")
@@ -2346,15 +2381,20 @@ def api_find_chat():
     result = call_backend('/api/telegram/find-chat', 'POST', data, auth_token=session['session_token'])
     return jsonify(result or {'error': 'Backend non disponibile'})
 
-@app.route('/api/auth/update-credentials', methods=['PUT'])
+@app.route('/api/auth/update-credentials', methods=['POST'])
+@require_auth
 def api_update_credentials():
     """Proxy per aggiornamento credenziali backend"""
-    if not is_authenticated():
-        return jsonify({'error': 'Autenticazione richiesta'}), 401
-    
     data = request.get_json()
-    result = call_backend('/api/auth/update-credentials', 'PUT', data, auth_token=session['session_token'])
-    return jsonify(result or {'error': 'Backend non disponibile'})
+    if not data or 'api_id' not in data or 'api_hash' not in data:
+        return jsonify({'success': False, 'error': 'API ID e API Hash richiesti'}), 400
+    
+    result = call_backend('/api/auth/update-credentials', 'POST', data)
+    
+    if result:
+        return jsonify(result)
+    else:
+        return jsonify({'success': False, 'error': 'Errore backend'}), 500
 
 @app.route('/api/user/change-password', methods=['POST'])
 def api_change_password():
@@ -4447,6 +4487,21 @@ def sync_session():
         })
     else:
         return jsonify({'error': 'Sessione non valida'}), 401
+
+@app.route('/api/logging/start', methods=['POST'])
+@require_auth
+def api_logging_start():
+    """Proxy per avviare logging su una chat"""
+    data = request.get_json()
+    if not data or 'chat_id' not in data:
+        return jsonify({'success': False, 'error': 'Dati chat richiesti'}), 400
+    
+    result = call_backend('/api/logging/start', 'POST', data)
+    
+    if result:
+        return jsonify(result)
+    else:
+        return jsonify({'success': False, 'error': 'Errore backend'}), 500
 
 if __name__ == '__main__':
     logger.info("🌐 Starting Telegram Chat Manager Frontend")

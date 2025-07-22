@@ -1,452 +1,500 @@
+// VERSIONE SEMPLIFICATA E DEBUG-FRIENDLY
+console.log('🔍 [CHATS] Script inizializzato');
+
+// Variabili globali
 let allChats = [];
 let filteredChats = [];
 
-// Performance optimization: Simple cache system
-const chatCache = {
-    data: null,
-    timestamp: null,
-    ttl: 60000, // 1 minute TTL for chat cache
-    
-    isValid() {
-        return this.data && this.timestamp && (Date.now() - this.timestamp) < this.ttl;
-    },
-    
-    set(data) {
-        this.data = data;
-        this.timestamp = Date.now();
-        console.log('🔄 [CACHE] Chat data cached');
-    },
-    
-    get() {
-        if (this.isValid()) {
-            console.log('✅ [CACHE] Using cached chat data');
-            return this.data;
-        }
-        return null;
-    },
-    
-    clear() {
-        this.data = null;
-        this.timestamp = null;
-        console.log('🗑️ [CACHE] Chat cache cleared');
-    }
-};
-
-// Funzioni di utilità
+// Funzioni di utilità base
 function showLoading() {
+    console.log('🔍 [CHATS] showLoading chiamata');
     const loadingElements = document.querySelectorAll('.loading');
-    loadingElements.forEach(el => el.style.display = 'block');
+    loadingElements.forEach(el => {
+        el.style.display = 'block';
+        console.log('🔍 [CHATS] Loading element mostrato:', el);
+    });
 }
 
 function hideLoading() {
+    console.log('🔍 [CHATS] hideLoading chiamata');
     const loadingElements = document.querySelectorAll('.loading');
-    loadingElements.forEach(el => el.style.display = 'none');
+    loadingElements.forEach(el => {
+        el.style.display = 'none';
+        console.log('🔍 [CHATS] Loading element nascosto:', el);
+    });
 }
 
 function showMessage(message, type = 'info') {
-    const toast = document.createElement('div');
-    toast.className = `status ${type}`;
-    toast.innerHTML = message; // Cambiato da textContent a innerHTML per supportare HTML
-    toast.style.position = 'fixed';
-    toast.style.top = '20px';
-    toast.style.right = '20px';
-    toast.style.zIndex = '9999';
-    toast.style.maxWidth = '400px';
+    console.log(`🔍 [CHATS] showMessage: ${message} (${type})`);
     
-    document.body.appendChild(toast);
-    
-    setTimeout(() => {
-        toast.remove();
-    }, type === 'error' ? 7000 : 3000); // Errori rimangono più a lungo
-}
-
-// Funzione per verificare autenticazione prima di procedere
-async function checkAuthenticationBeforeLoad() {
-    console.log('🔍 [AUTH] Verifica autenticazione...');
-    
-    const sessionToken = localStorage.getItem('session_token');
-    const accessToken = localStorage.getItem('access_token');
-    
-    // Se non ci sono token, redirect immediato al login
-    if (!sessionToken && !accessToken) {
-        console.warn('🔒 [AUTH] Nessun token trovato, redirect al login');
-        showMessage(`
-            <div style="text-align: center;">
-                <strong>🔒 Accesso Richiesto</strong><br>
-                Non sei autenticato.<br>
-                <small>Verrai reindirizzato al login...</small>
-            </div>
-        `, 'warning');
-        
-        setTimeout(() => {
-            window.location.href = '/login';
-        }, 2000);
-        return false;
+    const container = document.getElementById('errorContainer');
+    if (container) {
+        container.style.display = 'block';
+        container.className = `status ${type}`;
+        container.innerHTML = `<p>${message}</p>`;
     }
-    
-    // Verifica se i token sono nel formato corretto (JWT)
-    const token = sessionToken || accessToken;
-    const tokenParts = token.split('.');
-    if (tokenParts.length !== 3) {
-        console.warn('🔒 [AUTH] Token formato non valido, pulizia e redirect');
-        clearExpiredTokens();
-        setTimeout(() => {
-            window.location.href = '/login';
-        }, 2000);
-        return false;
-    }
-    
-    // Prova a sincronizzare con Flask session
-    try {
-        const syncResult = await fetch('/api/auth/sync-session', {
-            method: 'GET',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            }
-        });
-        
-        if (syncResult.ok) {
-            const syncData = await syncResult.json();
-            if (syncData.success) {
-                console.log('🔍 [AUTH] Sincronizzazione Flask session riuscita');
-                // Aggiorna localStorage se necessario
-                if (syncData.session_token && syncData.session_token !== sessionToken) {
-                    localStorage.setItem('session_token', syncData.session_token);
-                }
-                return true;
-            }
-        }
-        
-        // Se sync fallisce, proviamo a validare il token direttamente con il backend
-        console.log('🔍 [AUTH] Sync fallita, validazione diretta del token...');
-        const validateResult = await fetch('/api/auth/validate-session', {
-            method: 'GET',
-            headers: { 
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${token}`
-            }
-        });
-        
-        if (validateResult.ok) {
-            const validateData = await validateResult.json();
-            if (validateData.success && validateData.session_valid) {
-                console.log('🔍 [AUTH] Token valido, procediamo');
-                return true;
-            }
-        }
-        
-    } catch (error) {
-        console.error('🔒 [AUTH] Errore durante verifica:', error);
-    }
-    
-    // Se arriviamo qui, l'autenticazione è fallita
-    console.warn('🔒 [AUTH] Autenticazione fallita, redirect al login');
-    showMessage(`
-        <div style="text-align: center;">
-            <strong>🔒 Sessione Scaduta</strong><br>
-            I tuoi token di accesso non sono più validi.<br>
-            <small>Verrai reindirizzato al login...</small>
-        </div>
-    `, 'warning');
-    
-    clearExpiredTokens();
-    setTimeout(() => {
-        window.location.href = '/login';
-    }, 3000);
-    return false;
-}
-
-// Funzione per pulire token scaduti
-function clearExpiredTokens() {
-    localStorage.removeItem('session_token');
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('temp_phone');
-    localStorage.removeItem('temp_password');
-    localStorage.removeItem('temp_user_id');
-}
-
-// Funzione per rilevare token scaduti/invalidi
-function isTokenExpiredError(error) {
-    if (!error) return false;
-    
-    const expiredMessages = [
-        'Not enough segments',
-        'Token expired', 
-        'Invalid token',
-        'JWT token has expired',
-        'Authentication failed',
-        'Signature verification failed'
-    ];
-    
-    return expiredMessages.some(msg => error.includes(msg));
-}
-
-// Funzione per rilevare sessione Telegram scaduta
-function isTelegramSessionExpired(error) {
-    if (!error) return false;
-    
-    const telegramExpiredMessages = [
-        'Authorization lost. Please log in again',
-        'User +39',  // Inizia con numero di telefono
-        'is not authorized',
-        'Please log in again'
-    ];
-    
-    return telegramExpiredMessages.some(msg => error.includes(msg));
-}
-
-// Funzione per forzare logout su token scaduto
-function handleTokenExpired() {
-    console.log('🔒 Token JWT scaduto rilevato, pulizia e redirect al login');
-    
-    // Clear cache on token expiry for performance optimization
-    chatCache.clear();
-    console.log('🔍 [CACHE] Cache cleared due to JWT token expiry');
-    
-    clearExpiredTokens();
-    
-    showMessage(`
-        <div style="text-align: center;">
-            <strong>🔒 Token Scaduto</strong><br>
-            Il tuo token di accesso è scaduto.<br>
-            <small>Verrai reindirizzato al login...</small>
-        </div>
-    `, 'warning');
-    
-    setTimeout(() => {
-        window.location.href = '/login';
-    }, 3000);
-}
-
-// Funzione per gestire sessione Telegram scaduta
-function handleTelegramSessionExpired() {
-    console.log('📱 Sessione Telegram scaduta rilevata');
-    
-    // Clear cache on session expiry for performance optimization
-    chatCache.clear();
-    console.log('🔍 [CACHE] Cache cleared due to Telegram session expiry');
-    
-    showMessage(`
-        <div style="text-align: center; padding: 20px;">
-            <strong>📱 Sessione Telegram Scaduta</strong><br><br>
-            La tua sessione Telegram è scaduta ma il tuo account è ancora valido.<br>
-            <strong>Riattiva la sessione per continuare.</strong><br><br>
-            <a href="/dashboard" style="display: inline-block; background: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold;">
-                🔄 Riattiva Sessione Telegram
-            </a><br><br>
-            <small style="color: #666;">Non perdere i tuoi dati: è necessario solo verificare il codice Telegram</small>
-        </div>
-    `, 'warning');
-    
-    // Nasconde contenuto e mostra messaggio
-    document.getElementById('chatsContainer').style.display = 'none';
-    document.getElementById('errorContainer').style.display = 'none';
-    
-    // Non fare logout automatico - l'utente deve scegliere
-}
-
-// Funzione per inviare log al server
-async function sendLogToServer(level, message, data = null) {
-    try {
-        await fetch('/api/debug/log', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                level: level,
-                message: message,
-                data: data,
-                timestamp: new Date().toISOString(),
-                url: window.location.href
-            })
-        });
-    } catch (error) {
-        console.error('Errore nell\'invio log:', error);
-    }
-}
-
-// Override console methods per catturare tutti i log
-const originalConsole = {
-    log: console.log,
-    error: console.error,
-    warn: console.warn,
-    info: console.info
-};
-
-console.log = function(...args) {
-    originalConsole.log.apply(console, args);
-    sendLogToServer('log', args.join(' '));
-};
-
-console.error = function(...args) {
-    originalConsole.error.apply(console, args);
-    sendLogToServer('error', args.join(' '));
-};
-
-console.warn = function(...args) {
-    originalConsole.warn.apply(console, args);
-    sendLogToServer('warn', args.join(' '));
-};
-
-console.info = function(...args) {
-    originalConsole.info.apply(console, args);
-    sendLogToServer('info', args.join(' '));
-};
-
-// Cattura errori JavaScript non gestiti
-window.addEventListener('error', function(event) {
-    console.error('JavaScript Error:', event.error || event.message, 'at', event.filename, 'line', event.lineno);
-});
-
-window.addEventListener('unhandledrejection', function(event) {
-    console.error('Unhandled Promise Rejection:', event.reason);
-});
-
-// Test immediato per verificare che JavaScript funzioni
-console.log('🔍 [DEBUG] Script caricato');
-
-// Debug localStorage
-const sessionToken = localStorage.getItem('session_token');
-const accessToken = localStorage.getItem('access_token');
-console.log('🔍 [DEBUG] localStorage session_token:', sessionToken ? 'PRESENTE' : 'MISSING');
-console.log('🔍 [DEBUG] localStorage access_token:', accessToken ? 'PRESENTE' : 'MISSING');
-
-// Carica le chat all'avvio con verifica autenticazione
-document.addEventListener('DOMContentLoaded', async function() {
-    console.log('🔍 [DEBUG] DOMContentLoaded triggered');
-    document.getElementById('debugInfo').innerHTML = '<p>✅ DOMContentLoaded eseguito</p>';
-    document.getElementById('debugInfo').innerHTML += '<p>🔍 session_token: ' + (sessionToken ? 'PRESENTE' : 'MISSING') + '</p>';
-    document.getElementById('debugInfo').innerHTML += '<p>🔍 access_token: ' + (accessToken ? 'PRESENTE' : 'MISSING') + '</p>';
-    
-    // Verifica autenticazione prima di procedere
-    const isAuthenticated = await checkAuthenticationBeforeLoad();
-    
-    if (isAuthenticated) {
-        console.log('🔍 [DEBUG] Autenticazione verificata, procediamo con loadChats');
-        document.getElementById('debugInfo').innerHTML += '<p>✅ Autenticazione verificata</p>';
-        loadChats();
-    } else {
-        console.log('🔍 [DEBUG] Autenticazione fallita, non procediamo');
-        document.getElementById('debugInfo').innerHTML += '<p>❌ Autenticazione fallita</p>';
-    }
-});
-
-async function loadChats() {
-    console.log('🔍 [DEBUG] loadChats() chiamata');
-    document.getElementById('debugInfo').innerHTML += '<p>✅ loadChats() chiamata</p>';
-    
-    // Check cache first for performance optimization
-    const cachedData = chatCache.get();
-    if (cachedData) {
-        console.log('🔍 [DEBUG] Usando dati dalla cache');
-        document.getElementById('debugInfo').innerHTML += '<p>⚡ Usando cache (performance ottimizzata)</p>';
-        renderChatsFromCache(cachedData);
-        return;
-    }
-    
-    showLoading();
-    
-    try {
-        console.log('🔍 [DEBUG] Chiamando API /api/telegram/get-chats');
-        document.getElementById('debugInfo').innerHTML += '<p>🔄 Chiamando API...</p>';
-        
-        // Use optimized timeout for chat loading (20 seconds)
-        const result = await makeRequest('/api/telegram/get-chats', {
-            method: 'GET'
-        }, 20000);
-        
-        console.log('🔍 [DEBUG] Risposta API ricevuta:', result);
-        document.getElementById('debugInfo').innerHTML += '<p>✅ API chiamata completata</p>';
-        hideLoading();
-        
-        // Controlla se il risultato è null (token scaduto gestito da makeRequest)
-        if (result === null) {
-            console.log('🔍 [DEBUG] makeRequest ha restituito null, probabilmente token scaduto');
-            return; // makeRequest ha già gestito il logout
-        }
-        
-        if (result.success) {
-            console.log('🔍 [DEBUG] API success, chat ricevute:', result.chats.length);
-            document.getElementById('debugInfo').innerHTML += '<p>✅ API success, chat ricevute: ' + result.chats.length + '</p>';
-            
-            // Cache the successful result for performance
-            chatCache.set(result);
-            
-            // Render the chats
-            renderChatsFromCache(result);
-            
-        } else {
-            console.error('🔍 [DEBUG] API error:', result.error);
-            document.getElementById('debugInfo').innerHTML += '<p>❌ API error: ' + result.error + '</p>';
-            
-            // Controlla se è un errore di sessione Telegram scaduta
-            if (isTelegramSessionExpired(result.error)) {
-                console.log('🔍 [DEBUG] Sessione Telegram scaduta rilevata');
-                handleTelegramSessionExpired();
-            } else if (isTokenExpiredError(result.error)) {
-                console.log('🔍 [DEBUG] Token JWT scaduto rilevato');
-                handleTokenExpired();
-            } else {
-                showError(result.error || 'Errore durante il caricamento chat');
-            }
-        }
-    } catch (error) {
-        console.error('🔍 [DEBUG] Exception in loadChats:', error);
-        document.getElementById('debugInfo').innerHTML += '<p>❌ Exception: ' + error.message + '</p>';
-        hideLoading();
-        
-        // Controlla se è un errore di sessione Telegram scaduta o token JWT scaduto
-        if (isTelegramSessionExpired(error.message)) {
-            console.log('🔍 [DEBUG] Exception sessione Telegram scaduta rilevata');
-            handleTelegramSessionExpired();
-        } else if (isTokenExpiredError(error.message)) {
-            console.log('🔍 [DEBUG] Exception token JWT scaduto rilevata');
-            handleTokenExpired();
-        } else {
-            showError('Errore di connessione');
-        }
-    }
-}
-
-function renderChatsFromCache(result) {
-    console.log('🔍 [DEBUG] Rendering chats from cache/API result');
-    allChats = result.chats;
-    
-    // Mostra le prime 3 chat per debug + info cache
-    const firstChats = result.chats.slice(0, 3);
-    const cacheInfo = chatCache.isValid() ? '⚡ Dati dalla cache (performance ottimizzata)' : '🌐 Dati dall\'API';
-    
-    document.getElementById('chatsList').innerHTML = `
-        <div style="background: #e3f2fd; padding: 10px; border-radius: 6px; margin-bottom: 15px; border-left: 4px solid #2196f3;">
-            <strong>📊 Performance Status:</strong> ${cacheInfo}<br>
-            <small>Cache TTL: ${Math.round((chatCache.ttl - (Date.now() - (chatCache.timestamp || 0))) / 1000)}s rimanenti</small>
-        </div>
-        <h3>Prime 3 chat trovate (${result.chats.length} totali):</h3>
-        ${firstChats.map(chat => `
-            <div style="border: 1px solid #ccc; padding: 10px; margin: 10px 0; border-radius: 5px;">
-                <strong>${chat.title}</strong> (ID: ${chat.id})
-            </div>
-        `).join('')}
-        
-        <div style="margin-top: 20px; padding: 15px; background: #f0f9ff; border-radius: 8px; border: 1px solid #e0f2fe;">
-            <h4>🚀 Performance Optimizations Attive:</h4>
-            <ul style="margin: 10px 0; padding-left: 20px;">
-                <li>✅ Cache intelligente (TTL: 60s)</li>
-                <li>✅ Timeout ottimizzati (20s per chat, 25s per login)</li>
-                <li>✅ Gestione errori avanzata</li>
-                <li>✅ Feedback progressivo utente</li>
-            </ul>
-            <small style="color: #666;">
-                Sistema ottimizzato per ridurre i tempi di attesa e migliorare l'esperienza utente.
-            </small>
-        </div>
-    `;
-    
-    document.getElementById('chatsContainer').style.display = 'block';
 }
 
 function showError(message) {
-    document.getElementById('errorMessage').textContent = message;
-    document.getElementById('errorContainer').style.display = 'block';
-    document.getElementById('chatsContainer').style.display = 'none';
-} 
+    console.error('🔍 [CHATS] showError:', message);
+    showMessage(message, 'error');
+}
+
+// Funzione per mostrare il form di riautenticazione Telegram
+function showTelegramReauthForm() {
+    console.log('🔍 [CHATS] Mostrando form riautenticazione Telegram');
+    
+    hideLoading();
+    
+    const container = document.getElementById('chatsContainer');
+    if (container) {
+        container.style.display = 'block';
+        container.innerHTML = `
+            <div class="card" style="max-width: 600px; margin: 0 auto; padding: 30px;">
+                <h3>🔐 Sessione Telegram Scaduta</h3>
+                <p>La tua sessione Telegram è scaduta. Per continuare a utilizzare il servizio, devi riautenticarti.</p>
+                
+                <div id="reauthForm">
+                    <p>Clicca il pulsante qui sotto per ricevere un nuovo codice di verifica via SMS:</p>
+                    
+                    <button id="requestCodeBtn" class="btn btn-primary" onclick="requestTelegramCode()">
+                        📱 Richiedi Codice di Verifica
+                    </button>
+                    
+                    <div id="codeInputSection" style="display: none; margin-top: 20px;">
+                        <div class="form-group">
+                            <label for="verificationCode">Inserisci il codice ricevuto:</label>
+                            <input type="text" id="verificationCode" class="form-control" 
+                                   placeholder="12345" maxlength="5" 
+                                   style="font-size: 24px; text-align: center; letter-spacing: 10px;">
+                        </div>
+                        
+                        <button id="verifyCodeBtn" class="btn btn-success" onclick="verifyTelegramCode()">
+                            ✅ Verifica Codice
+                        </button>
+                    </div>
+                    
+                    <div id="reauthMessage" style="margin-top: 20px;"></div>
+                </div>
+                
+                <hr style="margin: 30px 0;">
+                
+                <p style="color: #666; font-size: 14px;">
+                    <strong>Nota:</strong> Questo non è un problema con la tua password o account. 
+                    Telegram richiede periodicamente una nuova autenticazione per motivi di sicurezza.
+                </p>
+            </div>
+        `;
+    }
+}
+
+// Funzione per mostrare il messaggio di configurazione credenziali API
+function showCredentialsSetupMessage() {
+    console.log('🔍 [CHATS] Mostrando messaggio configurazione credenziali');
+    
+    hideLoading();
+    
+    const container = document.getElementById('chatsContainer');
+    if (container) {
+        container.style.display = 'block';
+        container.innerHTML = `
+            <div class="card" style="max-width: 600px; margin: 0 auto; padding: 30px;">
+                <h3>🔑 Credenziali API Mancanti</h3>
+                <p>Per utilizzare le funzionalità Telegram, devi prima configurare le tue credenziali API.</p>
+                
+                <div style="margin: 20px 0;">
+                    <h4>📋 Come ottenere le credenziali:</h4>
+                    <ol style="text-align: left; margin: 20px 0;">
+                        <li>Vai su <a href="https://my.telegram.org" target="_blank">my.telegram.org</a></li>
+                        <li>Accedi con il tuo numero di telefono</li>
+                        <li>Vai su "API development tools"</li>
+                        <li>Copia <strong>API ID</strong> e <strong>API Hash</strong></li>
+                    </ol>
+                </div>
+                
+                <div style="margin: 30px 0;">
+                    <a href="/profile" class="btn btn-primary" style="margin-right: 10px;">
+                        ⚙️ Configura Credenziali
+                    </a>
+                    <a href="/dashboard" class="btn btn-secondary">
+                        🏠 Torna alla Dashboard
+                    </a>
+                </div>
+                
+                <hr style="margin: 30px 0;">
+                
+                <p style="color: #666; font-size: 14px;">
+                    <strong>Nota:</strong> Le credenziali API sono necessarie per connettersi ai server Telegram 
+                    e utilizzare funzionalità come la lista chat, il logging dei messaggi, ecc.
+                </p>
+            </div>
+        `;
+    }
+}
+
+// Richiedi nuovo codice Telegram
+async function requestTelegramCode() {
+    console.log('🔍 [CHATS] Richiesta nuovo codice Telegram');
+    
+    const btn = document.getElementById('requestCodeBtn');
+    const messageDiv = document.getElementById('reauthMessage');
+    
+    if (btn) btn.disabled = true;
+    if (messageDiv) messageDiv.innerHTML = '<p class="text-info">⏳ Invio codice in corso...</p>';
+    
+    try {
+        const response = await fetch('/api/auth/reactivate-session', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('session_token') || localStorage.getItem('access_token')}`
+            }
+        });
+        
+        const result = await response.json();
+        console.log('🔍 [CHATS] Risultato richiesta codice:', result);
+        
+        if (result.success) {
+            // Mostra sezione input codice
+            const codeSection = document.getElementById('codeInputSection');
+            if (codeSection) codeSection.style.display = 'block';
+            
+            if (messageDiv) {
+                messageDiv.innerHTML = `
+                    <p class="text-success">✅ Codice inviato al numero ${result.phone || 'registrato'}</p>
+                    <p>Controlla i tuoi messaggi Telegram e inserisci il codice qui sopra.</p>
+                `;
+            }
+            
+            // Focus sul campo codice
+            const codeInput = document.getElementById('verificationCode');
+            if (codeInput) codeInput.focus();
+            
+            // Nascondi il pulsante di richiesta
+            if (btn) btn.style.display = 'none';
+        } else {
+            if (messageDiv) {
+                messageDiv.innerHTML = `<p class="text-danger">❌ Errore: ${result.error || 'Impossibile inviare il codice'}</p>`;
+            }
+            if (btn) btn.disabled = false;
+        }
+    } catch (error) {
+        console.error('🔍 [CHATS] Errore richiesta codice:', error);
+        if (messageDiv) {
+            messageDiv.innerHTML = '<p class="text-danger">❌ Errore di connessione. Riprova.</p>';
+        }
+        if (btn) btn.disabled = false;
+    }
+}
+
+// Verifica codice Telegram
+async function verifyTelegramCode() {
+    console.log('🔍 [CHATS] Verifica codice Telegram');
+    
+    const codeInput = document.getElementById('verificationCode');
+    const btn = document.getElementById('verifyCodeBtn');
+    const messageDiv = document.getElementById('reauthMessage');
+    
+    if (!codeInput || !codeInput.value) {
+        if (messageDiv) {
+            messageDiv.innerHTML = '<p class="text-warning">⚠️ Inserisci il codice ricevuto</p>';
+        }
+        return;
+    }
+    
+    const code = codeInput.value.trim();
+    
+    if (btn) btn.disabled = true;
+    if (messageDiv) messageDiv.innerHTML = '<p class="text-info">⏳ Verifica in corso...</p>';
+    
+    try {
+        const response = await fetch('/api/auth/verify-session-code', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('session_token') || localStorage.getItem('access_token')}`
+            },
+            body: JSON.stringify({ code })
+        });
+        
+        const result = await response.json();
+        console.log('🔍 [CHATS] Risultato verifica codice:', result);
+        
+        if (result.success) {
+            if (messageDiv) {
+                messageDiv.innerHTML = '<p class="text-success">✅ Sessione riattivata con successo! Ricaricamento chat...</p>';
+            }
+            
+            // Aspetta un momento e ricarica le chat
+            setTimeout(() => {
+                window.location.reload();
+            }, 1500);
+        } else {
+            if (messageDiv) {
+                messageDiv.innerHTML = `<p class="text-danger">❌ Codice non valido: ${result.error || 'Riprova'}</p>`;
+            }
+            if (btn) btn.disabled = false;
+            if (codeInput) {
+                codeInput.value = '';
+                codeInput.focus();
+            }
+        }
+    } catch (error) {
+        console.error('🔍 [CHATS] Errore verifica codice:', error);
+        if (messageDiv) {
+            messageDiv.innerHTML = '<p class="text-danger">❌ Errore di connessione. Riprova.</p>';
+        }
+        if (btn) btn.disabled = false;
+    }
+}
+
+// Funzione di caricamento SEMPLIFICATA
+async function loadChats() {
+    console.log('🔍 [CHATS] === INIZIO loadChats() ===');
+    
+    // Update debug info
+    const debugInfo = document.getElementById('debugInfo');
+    if (debugInfo) {
+        debugInfo.innerHTML += '<p>✅ loadChats() AVVIATA</p>';
+    }
+    
+    showLoading();
+    showMessage('🔄 Caricamento chat in corso...', 'info');
+    
+    try {
+        console.log('🔍 [CHATS] Preparazione richiesta API...');
+        
+        // Token check
+        const sessionToken = localStorage.getItem('session_token');
+        const accessToken = localStorage.getItem('access_token');
+        console.log('🔍 [CHATS] Tokens disponibili:', {
+            sessionToken: sessionToken ? 'PRESENTE' : 'MISSING',
+            accessToken: accessToken ? 'PRESENTE' : 'MISSING'
+        });
+        
+        if (debugInfo) {
+            debugInfo.innerHTML += `<p>🔍 Token check: session=${sessionToken ? 'OK' : 'MISSING'}, access=${accessToken ? 'OK' : 'MISSING'}</p>`;
+        }
+        
+        // Costruisci headers
+        const headers = {
+            'Content-Type': 'application/json'
+        };
+        
+        const token = sessionToken || accessToken;
+        if (token) {
+            headers.Authorization = `Bearer ${token}`;
+            console.log('🔍 [CHATS] Authorization header aggiunto');
+        } else {
+            console.error('🔍 [CHATS] NESSUN TOKEN DISPONIBILE!');
+            throw new Error('Nessun token di autenticazione disponibile');
+        }
+        
+        console.log('🔍 [CHATS] Headers preparati:', headers);
+        
+        // Chiamata API diretta con fetch nativo
+        console.log('🔍 [CHATS] Chiamata fetch...');
+        
+        if (debugInfo) {
+            debugInfo.innerHTML += '<p>🔄 Chiamata API in corso...</p>';
+        }
+        
+        const response = await fetch('/api/telegram/get-chats', {
+            method: 'GET',
+            headers: headers
+        });
+        
+        console.log('🔍 [CHATS] Response ricevuta:', {
+            status: response.status,
+            ok: response.ok,
+            statusText: response.statusText,
+            headers: Object.fromEntries(response.headers.entries())
+        });
+        
+        if (debugInfo) {
+            debugInfo.innerHTML += `<p>📡 Response status: ${response.status}</p>`;
+        }
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('🔍 [CHATS] Response non ok:', errorText);
+            throw new Error(`HTTP ${response.status}: ${errorText}`);
+        }
+        
+        const result = await response.json();
+        console.log('🔍 [CHATS] JSON parsato:', result);
+        
+        if (debugInfo) {
+            debugInfo.innerHTML += `<p>✅ JSON ricevuto: ${JSON.stringify(result).substring(0, 200)}...</p>`;
+        }
+        
+        hideLoading();
+        
+        // ✅ NUOVO: Gestione specifica per sessione Telegram scaduta
+        if (!result.success && result.error_code === 'TELEGRAM_SESSION_EXPIRED') {
+            console.log('🔍 [CHATS] Sessione Telegram scaduta rilevata');
+            
+            if (debugInfo) {
+                debugInfo.innerHTML += '<p>🔐 TELEGRAM SESSION EXPIRED - Riautenticazione richiesta</p>';
+            }
+            
+            // Mostra il form di riautenticazione
+            showTelegramReauthForm();
+            return;
+        }
+        
+        // ✅ NUOVO: Gestione credenziali API mancanti
+        if (!result.success && result.error_code === 'API_CREDENTIALS_NOT_SET') {
+            console.log('🔍 [CHATS] Credenziali API mancanti rilevate');
+            
+            if (debugInfo) {
+                debugInfo.innerHTML += '<p>🔑 API CREDENTIALS NOT SET - Configurazione richiesta</p>';
+            }
+            
+            // Mostra messaggio per configurare credenziali
+            showCredentialsSetupMessage();
+            return;
+        }
+        
+        if (result.success) {
+            console.log('🔍 [CHATS] Successo! Chat trovate:', result.chats.length);
+            
+            allChats = result.chats || [];
+            
+            if (debugInfo) {
+                debugInfo.innerHTML += `<p>🎉 SUCCESS: ${allChats.length} chat caricate</p>`;
+            }
+            
+            // Mostra risultato semplificato
+            showMessage(`✅ Successo! ${allChats.length} chat caricate`, 'success');
+            
+            renderChats();
+            
+            const chatsContainer = document.getElementById('chatsContainer');
+            if (chatsContainer) {
+                chatsContainer.style.display = 'block';
+            }
+            
+        } else {
+            console.error('🔍 [CHATS] API error:', result.error);
+            
+            if (debugInfo) {
+                debugInfo.innerHTML += `<p>❌ API ERROR: ${result.error}</p>`;
+            }
+            
+            throw new Error(result.error || 'Errore API sconosciuto');
+        }
+        
+    } catch (error) {
+        console.error('🔍 [CHATS] ERRORE FATALE:', error);
+        
+        hideLoading();
+        
+        if (debugInfo) {
+            debugInfo.innerHTML += `<p>💥 EXCEPTION: ${error.message}</p>`;
+        }
+        
+        showError(`Errore: ${error.message}`);
+    }
+    
+    console.log('🔍 [CHATS] === FINE loadChats() ===');
+}
+
+// Funzione di rendering chat SEMPLIFICATA
+function renderChats() {
+    console.log('🔍 [CHATS] renderChats chiamata, chat da mostrare:', allChats.length);
+    
+    const container = document.getElementById('chatsList');
+    if (!container) {
+        console.error('🔍 [CHATS] Container chatsList non trovato!');
+        return;
+    }
+    
+    if (allChats.length === 0) {
+        container.innerHTML = '<p>Nessuna chat trovata.</p>';
+        return;
+    }
+    
+    // Rendering semplificato
+    container.innerHTML = allChats.map(chat => `
+        <div class="chat-item" style="padding: 10px; border: 1px solid #ddd; margin-bottom: 10px;">
+            <h4>${chat.title || 'Chat senza titolo'}</h4>
+            <p>ID: ${chat.id}</p>
+            <p>Tipo: ${chat.type}</p>
+            <button onclick="startLogging(${JSON.stringify(chat)})" class="btn btn-success">Attiva Logging</button>
+        </div>
+    `).join('');
+    
+    console.log('🔍 [CHATS] Rendering completato');
+}
+
+// Nuova funzione per attivare logging
+async function startLogging(chat) {
+    console.log('🔍 [LOGGING] Attivazione logging per chat:', chat);
+    
+    try {
+        showLoading();
+        
+        const response = await fetch('/api/logging/start', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${localStorage.getItem('session_token') || localStorage.getItem('access_token')}`
+            },
+            body: JSON.stringify({
+                chat_id: chat.id.toString(),
+                chat_title: chat.title || '',
+                chat_username: chat.username || '',
+                chat_type: chat.type || 'unknown'
+            })
+        });
+        
+        const result = await response.json();
+        
+        hideLoading();
+        
+        if (result.success) {
+            showMessage(`✅ Logging attivato per ${chat.title}! Container: ${result.container_name}`, 'success');
+        } else {
+            showMessage(`❌ Errore: ${result.error}`, 'error');
+        }
+    } catch (error) {
+        hideLoading();
+        showMessage(`❌ Errore di connessione: ${error.message}`, 'error');
+    }
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// Event listener principale SEMPLIFICATO
+document.addEventListener('DOMContentLoaded', function() {
+    console.log('🔍 [CHATS] DOMContentLoaded triggered');
+    
+    const debugInfo = document.getElementById('debugInfo');
+    if (debugInfo) {
+        debugInfo.innerHTML = '<p>🚀 Script inizializzato</p>';
+        
+        // Info sui token
+        const sessionToken = localStorage.getItem('session_token');
+        const accessToken = localStorage.getItem('access_token');
+        
+        debugInfo.innerHTML += `<p>🔐 session_token: ${sessionToken ? 'PRESENTE' : 'MISSING'}</p>`;
+        debugInfo.innerHTML += `<p>🔐 access_token: ${accessToken ? 'PRESENTE' : 'MISSING'}</p>`;
+        
+        // Info sui DOM elements
+        debugInfo.innerHTML += `<p>🏗️ chatsList: ${document.getElementById('chatsList') ? 'FOUND' : 'MISSING'}</p>`;
+        debugInfo.innerHTML += `<p>🏗️ chatsContainer: ${document.getElementById('chatsContainer') ? 'FOUND' : 'MISSING'}</p>`;
+        debugInfo.innerHTML += `<p>🏗️ errorContainer: ${document.getElementById('errorContainer') ? 'FOUND' : 'MISSING'}</p>`;
+    }
+    
+    // Avvia caricamento senza controlli di autenticazione complessi
+    console.log('🔍 [CHATS] Avvio loadChats() diretto...');
+    loadChats();
+});
+
+console.log('🔍 [CHATS] Script completamente caricato e pronto'); 

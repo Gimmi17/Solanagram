@@ -38,7 +38,6 @@ COPY requirements*.txt ./
 
 # Installa dipendenze in ordine corretto
 RUN pip install -r requirements.txt
-RUN pip install -r requirements-dev.txt
 RUN pip install -r requirements-test.txt
 
 # Copia codice frontend

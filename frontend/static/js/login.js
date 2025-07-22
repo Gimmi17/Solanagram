@@ -199,19 +199,37 @@ document.addEventListener('DOMContentLoaded', function() {
             hideLoading();
             
             if (result.success) {
-                // Salva user_id per la verifica
-                if (result.user_id) {
-                    localStorage.setItem('temp_user_id', result.user_id);
+                // Check if this is a direct login (without API credentials)
+                if (result.access_token) {
+                    // Direct login - save token and redirect to dashboard
+                    localStorage.setItem('access_token', result.access_token);
+                    localStorage.setItem('session_token', result.access_token);
+                    
+                    // Show warning if present
+                    if (result.warning) {
+                        showMessage(result.warning, 'warning');
+                        setTimeout(() => {
+                            window.location.href = '/dashboard';
+                        }, 3000);
+                    } else {
+                        // Redirect to dashboard
+                        window.location.href = '/dashboard';
+                    }
+                } else {
+                    // Normal login flow - save data for verification
+                    if (result.user_id) {
+                        localStorage.setItem('temp_user_id', result.user_id);
+                    }
+                    localStorage.setItem('temp_phone', phone);
+                    localStorage.setItem('temp_password', password);
+                    
+                    showMessage(result.message, 'success');
+                    
+                    // Redirect a pagina verifica codice
+                    setTimeout(() => {
+                        window.location.href = '/verify-code';
+                    }, 2000);
                 }
-                localStorage.setItem('temp_phone', phone);
-                localStorage.setItem('temp_password', password);
-                
-                showMessage(result.message, 'success');
-                
-                // Redirect a pagina verifica codice
-                setTimeout(() => {
-                    window.location.href = '/verify-code';
-                }, 2000);
             } else {
                 // Gestione speciale per FLOOD_WAIT
                 if (result.error && result.error.includes('FLOOD_WAIT')) {
